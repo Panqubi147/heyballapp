@@ -32,6 +32,8 @@ const categoryLabels: Record<string, string> = {
   "break-building": "Budowanie breaka",
 };
 
+type ExerciseSourceFilter = "all" | "own" | "global" | "coach";
+
 export default function ProgramsPage() {
   const { user } = useAuth();
 
@@ -41,8 +43,10 @@ export default function ProgramsPage() {
   const [programName, setProgramName] = useState("");
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [sourceFilter, setSourceFilter] = useState<ExerciseSourceFilter>("all");
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   const [editingProgramId, setEditingProgramId] = useState<string | null>(null);
 
@@ -51,69 +55,95 @@ export default function ProgramsPage() {
       setLoading(false);
       return;
     }
-
+  
     setLoading(true);
-
-    const ownExerciseSnapshot = await getDocs(
-      query(collection(db, "exercises"), where("userId", "==", user.uid))
-    );
-
-    const globalExerciseSnapshot = await getDocs(
-      query(collection(db, "exercises"), where("isGlobal", "==", true))
-    );
-
-    const ownExercises = ownExerciseSnapshot.docs.map((document) => ({
-      id: document.id,
-      ...document.data(),
-    })) as Exercise[];
-
-    const globalExercises = globalExerciseSnapshot.docs.map((document) => ({
-      id: document.id,
-      ...document.data(),
-    })) as Exercise[];
-
-    const loadedExercises = [
-      ...ownExercises,
-      ...globalExercises.filter(
-        (globalExercise) =>
-          !ownExercises.some((ownExercise) => ownExercise.id === globalExercise.id)
-      ),
-    ];
-
-    const programsSnapshot = await getDocs(
-      query(collection(db, "trainingPrograms"), where("userId", "==", user.uid))
-    );
-
-    const loadedPrograms = programsSnapshot.docs.map((document) => ({
-      id: document.id,
-      ...document.data(),
-    })) as TrainingProgram[];
-
-    setExercises(loadedExercises);
-    setPrograms(loadedPrograms);
-    setLoading(false);
+    setLoadError("");
+  
+    try {
+      const ownExerciseSnapshot = await getDocs(
+        query(collection(db, "exercises"), where("userId", "==", user.uid))
+      );
+  
+      const ownExercises = ownExerciseSnapshot.docs.map((document) => ({
+        id: document.id,
+        ...document.data(),
+      })) as Exercise[];
+  
+      let globalExercises: Exercise[] = [];
+  
+      try {
+        const globalExerciseSnapshot = await getDocs(
+          query(collection(db, "exercises"), where("isGlobal", "==", true))
+        );
+  
+        globalExercises = globalExerciseSnapshot.docs.map((document) => ({
+          id: document.id,
+          ...document.data(),
+        })) as Exercise[];
+      } catch (globalError) {
+        console.error("Błąd globalnych ćwiczeń:", globalError);
+      }
+  
+      let loadedPrograms: TrainingProgram[] = [];
+  
+      try {
+        const programsSnapshot = await getDocs(
+          query(collection(db, "trainingPrograms"), where("userId", "==", user.uid))
+        );
+  
+        loadedPrograms = programsSnapshot.docs.map((document) => ({
+          id: document.id,
+          ...document.data(),
+        })) as TrainingProgram[];
+      } catch (programError) {
+        console.error("Błąd treningów:", programError);
+      }
+  
+      const loadedExercises = [
+        ...ownExercises,
+        ...globalExercises.filter(
+          (globalExercise) =>
+            !ownExercises.some((ownExercise) => ownExercise.id === globalExercise.id)
+        ),
+      ];
+  
+      setExercises(loadedExercises);
+      setPrograms(loadedPrograms);
+    } catch (error) {
+      console.error("Błąd główny loadData:", error);
+      setLoadError("Nie udało się pobrać Twoich ćwiczeń. Najpewniej Firestore Rules blokują exercises.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    loadData().catch((error) => {
-      console.error(error);
-      setLoading(false);
-    });
+    loadData();
   }, [user]);
 
   const filteredExercises = useMemo(() => {
     return exercises.filter((exercise) => {
       const matchesSearch =
         exercise.name.toLowerCase().includes(search.toLowerCase()) ||
-        exercise.description.toLowerCase().includes(search.toLowerCase()) ||
+        (exercise.description || "").toLowerCase().includes(search.toLowerCase()) ||
         exercise.category.toLowerCase().includes(search.toLowerCase());
 
       const matchesCategory =
         categoryFilter === "all" || exercise.category === categoryFilter;
 
-      return matchesSearch && matchesCategory;
+      const matchesSource =
+        sourceFilter === "all" ||
+        (sourceFilter === "own" &&
+          !exercise.isGlobal &&
+          !exercise.assignedByCoachId) ||
+        (sourceFilter === "global" && exercise.isGlobal) ||
+        (sourceFilter === "coach" &&
+          exercise.assignedByCoachId &&
+          !exercise.isGlobal);
+
+      return matchesSearch && matchesCategory && matchesSource;
     });
-  }, [exercises, search, categoryFilter]);
+  }, [exercises, search, categoryFilter, sourceFilter]);
 
   const selectedExercises = useMemo(() => {
     return selectedExerciseIds
@@ -207,10 +237,13 @@ export default function ProgramsPage() {
       setSelectedExerciseIds([]);
       setEditingProgramId(null);
       await loadData();
-    } catch (error) {
-      console.error(error);
-      alert(editingProgramId ? "Błąd aktualizacji treningu." : "Błąd zapisu treningu.");
-    } finally {
+    } catch (error: any) {
+      console.error("Błąd zapisu treningu:", error);
+    
+      alert(
+        `Błąd zapisu treningu: ${error?.code || ""} ${error?.message || ""}`
+      );
+    }finally {
       setSaving(false);
     }
   }
@@ -241,12 +274,16 @@ export default function ProgramsPage() {
 
         {loading ? (
           <p>Ładowanie...</p>
+        ) : loadError ? (
+          <div className="rounded-2xl bg-red-50 p-6 font-bold text-red-700 shadow">
+            {loadError}
+          </div>
         ) : (
           <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
             <div className="rounded-2xl bg-white p-6 shadow">
               <h2 className="mb-4 text-xl font-bold">Baza ćwiczeń</h2>
-
-              <div className="mb-4 grid gap-3 md:grid-cols-2">
+              
+              <div className="mb-4 grid gap-3 md:grid-cols-3">
                 <input
                   className="rounded border p-3"
                   placeholder="Szukaj ćwiczeń"
@@ -269,13 +306,37 @@ export default function ProgramsPage() {
                   <option value="masse">Masse</option>
                   <option value="position">Pozycjonowanie</option>
                 </select>
+
+                <select
+                  className="rounded border p-3"
+                  value={sourceFilter}
+                  onChange={(event) =>
+                    setSourceFilter(event.target.value as ExerciseSourceFilter)
+                  }
+                >
+                  <option value="all">Wszystkie źródła</option>
+                  <option value="own">Moje ćwiczenia</option>
+                  <option value="global">Globalne</option>
+                  <option value="coach">Od trenera</option>
+                </select>
               </div>
 
               {filteredExercises.length === 0 ? (
-                <div className="rounded border p-4 text-slate-600">
-                  Brak ćwiczeń pasujących do filtrów.
-                </div>
-              ) : (
+  <div className="rounded border p-4 text-slate-600">
+    Brak ćwiczeń pasujących do filtrów.
+
+    <div className="mt-3 rounded bg-slate-100 p-3 text-xs text-slate-700">
+      Załadowane ćwiczenia: {exercises.length}
+      <br />
+      UID konta: {user?.uid}
+      <br />
+      Filtr kategorii: {categoryFilter}
+      <br />
+      Filtr źródła: {sourceFilter}
+    </div>
+  </div>
+) : (
+              
                 <div className="space-y-4">
                   {filteredExercises.map((exercise) => {
                     const selected = selectedExerciseIds.includes(exercise.id || "");
@@ -347,13 +408,6 @@ export default function ProgramsPage() {
                     </button>
                   )}
                 </div>
-
-                {isEditing && (
-                  <div className="mb-4 rounded-xl bg-orange-50 p-4 text-sm font-bold text-orange-800">
-                    Edytujesz istniejący trening. Możesz zmienić nazwę, dodać/usunąć ćwiczenia
-                    albo zmienić kolejność.
-                  </div>
-                )}
 
                 <input
                   className="mb-4 w-full rounded border p-3"

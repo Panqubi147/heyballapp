@@ -126,45 +126,56 @@ export default function PracticePage({ params }: { params: { programId: string }
 
   async function loadProgramAndExercises() {
     if (!user) return null;
-
+  
     const programSnapshot = await getDoc(doc(db, "trainingPrograms", params.programId));
-
+  
     if (!programSnapshot.exists()) {
       alert("Nie znaleziono treningu.");
       setLoading(false);
       return null;
     }
-
+  
     const loadedProgram = {
       id: programSnapshot.id,
       ...programSnapshot.data(),
     } as TrainingProgram;
-
+  
     if (loadedProgram.userId !== user.uid) {
       alert("Nie masz dostępu do tego treningu.");
       setLoading(false);
       return null;
     }
-
-    const exercisesSnapshot = await getDocs(
-      query(collection(db, "exercises"), where("userId", "==", user.uid))
-    );
-
-    const allExercises = exercisesSnapshot.docs.map((document) => ({
-      id: document.id,
-      ...document.data(),
-    })) as Exercise[];
-
-    const orderedExercises = loadedProgram.exerciseIds
-      .map((id) => allExercises.find((exercise) => exercise.id === id))
-      .filter(Boolean) as Exercise[];
-
+  
+    const orderedExercises: Exercise[] = [];
+  
+    for (const exerciseId of loadedProgram.exerciseIds || []) {
+      const exerciseSnapshot = await getDoc(doc(db, "exercises", exerciseId));
+  
+      if (!exerciseSnapshot.exists()) {
+        console.warn("Nie znaleziono ćwiczenia:", exerciseId);
+        continue;
+      }
+  
+      const exercise = {
+        id: exerciseSnapshot.id,
+        ...exerciseSnapshot.data(),
+      } as Exercise;
+  
+      const canUseExercise =
+        exercise.userId === user.uid ||
+        exercise.isGlobal === true ||
+        Boolean(exercise.assignedByCoachId);
+  
+      if (canUseExercise) {
+        orderedExercises.push(exercise);
+      }
+    }
+  
     setProgram(loadedProgram);
     setExercises(orderedExercises);
-
+  
     return { loadedProgram, orderedExercises };
   }
-
   async function findExistingSession() {
     if (!user) return null;
 
