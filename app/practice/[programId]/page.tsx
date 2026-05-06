@@ -344,7 +344,7 @@ export default function PracticePage({ params }: { params: { programId: string }
   }
 
   async function finishSession() {
-    if (!sessionId) return;
+    if (!sessionId || !user) return;
 
     const confirmed = confirm("Zakończyć i zapisać całą sesję?");
     if (!confirmed) return;
