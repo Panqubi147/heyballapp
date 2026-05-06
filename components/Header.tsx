@@ -4,7 +4,8 @@ import Link from "next/link";
 import { useAuth } from "@/components/AuthProvider";
 
 const items = [
-  { href: "/", label: "Dashboard" },
+  { href: "/", label: "Home" },
+  { href: "/dashboard", label: "Dashboard" },
   { href: "/editor", label: "Kreator" },
   { href: "/exercises", label: "Ćwiczenia" },
   { href: "/programs", label: "Treningi" },

@@ -269,9 +269,27 @@ function EditorContent() {
             Rysuj strzałkę
           </button>
 
-          <button onClick={() => setLines([])} className="rounded bg-slate-800 px-3 py-2 text-white">
-            Usuń linie
-          </button>
+          <div className="flex flex-wrap gap-2">
+  <button
+    onClick={() => {
+      if (lines.length === 0) return;
+
+      setLines((prev) => prev.slice(0, -1));
+    }}
+    disabled={lines.length === 0}
+    className="rounded bg-orange-600 px-3 py-2 text-white disabled:opacity-40"
+  >
+    Usuń ostatnią linię
+  </button>
+
+  <button
+    onClick={() => setLines([])}
+    disabled={lines.length === 0}
+    className="rounded bg-slate-800 px-3 py-2 text-white disabled:opacity-40"
+  >
+    Usuń wszystkie linie
+  </button>
+</div>
         </div>
 
         <p className="mb-4 text-sm text-slate-600">
