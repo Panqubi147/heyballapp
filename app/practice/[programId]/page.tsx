@@ -358,6 +358,23 @@ export default function PracticePage({ params }: { params: { programId: string }
         sessionAveragePercentage,
       });
 
+      const comment = prompt(
+        "Dodaj komentarz po treningu albo zostaw puste i kliknij OK, żeby pominąć."
+      );
+      
+      if (comment?.trim()) {
+        await addDoc(collection(db, "reflections"), {
+          userId: user.uid,
+          text: comment.trim(),
+          type: "training",
+          programId: params.programId,
+          programName: program?.name || "Trening",
+          sessionId,
+          sessionAveragePercentage,
+          createdAt: serverTimestamp(),
+        });
+      }
+      
       setFinished(true);
       alert("Sesja zapisana.");
     } catch (error) {

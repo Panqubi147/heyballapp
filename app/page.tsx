@@ -389,6 +389,7 @@ export default function HomePage() {
     const items = completedSessions
       .map((session) => ({
         id: session.id,
+        programId: session.programId,
         date: getSessionDate(session),
         title: `Ukończono trening "${session.programName || "Trening"}"`,
         subtitle: `Średnia skuteczność: ${getSessionAverage(session).toFixed(1)}%`,
@@ -613,19 +614,28 @@ export default function HomePage() {
               ) : (
                 <div className="mt-4 space-y-3">
                   {activityFeed.map((item) => (
-                    <div key={item.id} className="rounded-xl bg-slate-50 p-4">
-                      <p className="font-bold">{item.title}</p>
-                      <p className="text-sm text-slate-600">{item.subtitle}</p>
-                      <p className="mt-1 text-xs text-slate-400">
-                        {item.date
-                          ? new Intl.DateTimeFormat("pl-PL", {
-                              dateStyle: "medium",
-                              timeStyle: "short",
-                            }).format(item.date)
-                          : "-"}
-                      </p>
-                    </div>
-                  ))}
+  <div key={item.id} className="rounded-xl bg-slate-50 p-4">
+    <p className="font-bold">{item.title}</p>
+
+    <p className="text-sm text-slate-600">{item.subtitle}</p>
+
+    <p className="mt-1 text-xs text-slate-400">
+      {item.date
+        ? new Intl.DateTimeFormat("pl-PL", {
+            dateStyle: "medium",
+            timeStyle: "short",
+          }).format(item.date)
+        : "-"}
+    </p>
+
+    <Link
+      href={`/practice/${item.programId}`}
+      className="mt-4 inline-block rounded-lg bg-orange-600 px-4 py-2 text-sm font-bold text-white hover:bg-orange-500"
+    >
+      Powtórz trening
+    </Link>
+  </div>
+))}
                 </div>
               )}
             </div>
@@ -807,6 +817,14 @@ export default function HomePage() {
               </p>
             </div>
           )}
+
+<Link
+  href="/reflections"
+  className="fixed bottom-6 right-6 z-50 rounded-full bg-orange-600 px-5 py-4 font-black text-white shadow-xl hover:bg-orange-500"
+>
+  💭 Przemyślenia
+</Link>
+
         </section>
       )}
     </LoginRequired>
