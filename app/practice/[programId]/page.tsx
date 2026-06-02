@@ -345,10 +345,10 @@ export default function PracticePage({ params }: { params: { programId: string }
 
   async function finishSession() {
     if (!sessionId || !user) return;
-
+  
     const confirmed = confirm("Zakończyć i zapisać całą sesję?");
     if (!confirmed) return;
-
+  
     try {
       await updateDoc(doc(db, "trainingSessions", sessionId), {
         status: "completed",
@@ -357,16 +357,18 @@ export default function PracticePage({ params }: { params: { programId: string }
         results: allResults,
         sessionAveragePercentage,
       });
-
+  
       const comment = prompt(
         "Dodaj komentarz po treningu albo zostaw puste i kliknij OK, żeby pominąć."
       );
-      
+  
       if (comment?.trim()) {
         await addDoc(collection(db, "reflections"), {
           userId: user.uid,
           text: comment.trim(),
           type: "training",
+          activityType: "training",
+          activityDate: new Date().toISOString().slice(0, 10),
           programId: params.programId,
           programName: program?.name || "Trening",
           sessionId,
@@ -374,7 +376,7 @@ export default function PracticePage({ params }: { params: { programId: string }
           createdAt: serverTimestamp(),
         });
       }
-      
+  
       setFinished(true);
       alert("Sesja zapisana.");
     } catch (error) {

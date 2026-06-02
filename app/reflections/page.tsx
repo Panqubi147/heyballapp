@@ -14,11 +14,15 @@ import { db } from "@/lib/firebase";
 import { useAuth } from "@/components/AuthProvider";
 import { LoginRequired } from "@/components/LoginRequired";
 
+type ActivityType = "training" | "match" | "tournament" | "note";
+
 type Reflection = {
   id: string;
   userId: string;
   text: string;
   type: "general" | "training";
+  activityType?: ActivityType;
+  activityDate?: string;
   programName?: string;
   sessionAveragePercentage?: number;
   createdAt?: {
@@ -28,6 +32,13 @@ type Reflection = {
 
 type RangeFilter = "week" | "month" | "all";
 
+const activityLabels: Record<ActivityType, string> = {
+  training: "Po treningu",
+  match: "Sparing",
+  tournament: "Turniej",
+  note: "Notatka",
+};
+
 function formatDate(timestamp?: { seconds: number }) {
   if (!timestamp?.seconds) return "-";
 
@@ -35,6 +46,14 @@ function formatDate(timestamp?: { seconds: number }) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(timestamp.seconds * 1000));
+}
+
+function formatActivityDate(date?: string) {
+  if (!date) return "";
+
+  return new Intl.DateTimeFormat("pl-PL", {
+    dateStyle: "medium",
+  }).format(new Date(`${date}T12:00:00`));
 }
 
 function getRangeStart(range: RangeFilter) {
@@ -53,6 +72,41 @@ function getRangeStart(range: RangeFilter) {
   }
 
   return null;
+}
+
+function getBadge(item: Reflection) {
+  if (item.type === "training" || item.activityType === "training") {
+    return {
+      label: "Po treningu",
+      className: "bg-orange-100 text-orange-700",
+    };
+  }
+
+  if (item.activityType === "match") {
+    return {
+      label: "Sparing",
+      className: "bg-blue-100 text-blue-700",
+    };
+  }
+
+  if (item.activityType === "tournament") {
+    return {
+      label: "Turniej",
+      className: "bg-purple-100 text-purple-700",
+    };
+  }
+
+  if (item.activityType === "note") {
+    return {
+      label: "Notatka",
+      className: "bg-green-100 text-green-700",
+    };
+  }
+
+  return {
+    label: "Ogólne",
+    className: "bg-slate-100 text-slate-700",
+  };
 }
 
 export default function ReflectionsPage() {
@@ -122,6 +176,8 @@ export default function ReflectionsPage() {
         userId: user.uid,
         text: text.trim(),
         type: "general",
+        activityType: "note",
+        activityDate: new Date().toISOString().slice(0, 10),
         createdAt: serverTimestamp(),
       });
 
@@ -144,7 +200,7 @@ export default function ReflectionsPage() {
           <div className="rounded-2xl bg-white p-6 shadow">
             <h1 className="text-3xl font-black">Przemyślenia</h1>
             <p className="mt-2 text-slate-600">
-              Zapisuj swoje obserwacje po treningach i ogólne notatki o progresie.
+              Zapisuj obserwacje po treningach, sparingach, turniejach i ogólne notatki o progresie.
             </p>
           </div>
 
@@ -188,39 +244,51 @@ export default function ReflectionsPage() {
               </div>
             ) : (
               <div className="space-y-4">
-                {filteredReflections.map((item) => (
-                  <article key={item.id} className="rounded-2xl border p-4">
-                    <div className="mb-2 flex flex-wrap items-center gap-2">
-                      <span
-                        className={`rounded-full px-3 py-1 text-xs font-bold ${
-                          item.type === "training"
-                            ? "bg-orange-100 text-orange-700"
-                            : "bg-slate-100 text-slate-700"
-                        }`}
-                      >
-                        {item.type === "training" ? "Po treningu" : "Ogólne"}
-                      </span>
+                {filteredReflections.map((item) => {
+                  const badge = getBadge(item);
 
-                      {item.programName && (
-                        <span className="text-sm font-bold text-slate-600">
-                          {item.programName}
+                  return (
+                    <article key={item.id} className="rounded-2xl border p-4">
+                      <div className="mb-2 flex flex-wrap items-center gap-2">
+                        <span
+                          className={`rounded-full px-3 py-1 text-xs font-bold ${badge.className}`}
+                        >
+                          {badge.label}
                         </span>
-                      )}
 
-                      {typeof item.sessionAveragePercentage === "number" && (
-                        <span className="text-sm font-bold text-green-700">
-                          {item.sessionAveragePercentage.toFixed(1)}%
-                        </span>
-                      )}
-                    </div>
+                        {item.programName && (
+                          <span className="text-sm font-bold text-slate-600">
+                            {item.programName}
+                          </span>
+                        )}
 
-                    <p className="whitespace-pre-wrap text-slate-800">{item.text}</p>
+                        {item.activityDate && (
+                          <span className="text-sm font-bold text-slate-500">
+                            {formatActivityDate(item.activityDate)}
+                          </span>
+                        )}
 
-                    <p className="mt-3 text-xs text-slate-400">
-                      {formatDate(item.createdAt)}
-                    </p>
-                  </article>
-                ))}
+                        {item.activityType && (
+                          <span className="text-xs text-slate-400">
+                            {activityLabels[item.activityType]}
+                          </span>
+                        )}
+
+                        {typeof item.sessionAveragePercentage === "number" && (
+                          <span className="text-sm font-bold text-green-700">
+                            {item.sessionAveragePercentage.toFixed(1)}%
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="whitespace-pre-wrap text-slate-800">{item.text}</p>
+
+                      <p className="mt-3 text-xs text-slate-400">
+                        Dodano: {formatDate(item.createdAt)}
+                      </p>
+                    </article>
+                  );
+                })}
               </div>
             )}
           </div>

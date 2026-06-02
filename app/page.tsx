@@ -2,7 +2,14 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { collection, getDocs, query, where } from "firebase/firestore";
+import {
+  addDoc,
+  collection,
+  getDocs,
+  query,
+  serverTimestamp,
+  where,
+} from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/components/AuthProvider";
 import { LoginRequired } from "@/components/LoginRequired";
@@ -42,6 +49,19 @@ type ExerciseDoc = {
   isGlobal?: boolean;
 };
 
+type ActivityType = "match" | "tournament" | "note";
+
+type ActivityCalendarDoc = {
+  id: string;
+  userId: string;
+  type: ActivityType;
+  date: string;
+  notes?: string;
+  createdAt?: FirestoreTimestamp;
+};
+
+const WEEKLY_GOAL = 3;
+
 const categoryLabels: Record<string, string> = {
   potting: "Wbijanie",
   jumps: "Skoki",
@@ -55,7 +75,11 @@ const categoryLabels: Record<string, string> = {
   "break-building": "Budowanie breaka",
 };
 
-const WEEKLY_GOAL = 3;
+const activityLabels: Record<ActivityType, string> = {
+  match: "Sparing",
+  tournament: "Turniej",
+  note: "Notatka",
+};
 
 function formatDate(timestamp?: FirestoreTimestamp) {
   if (!timestamp?.seconds) return "-";
@@ -66,8 +90,18 @@ function formatDate(timestamp?: FirestoreTimestamp) {
   }).format(new Date(timestamp.seconds * 1000));
 }
 
+function formatCalendarDate(dateKey: string) {
+  return new Intl.DateTimeFormat("pl-PL", {
+    dateStyle: "full",
+  }).format(new Date(`${dateKey}T12:00:00`));
+}
+
 function getDateKey(date: Date) {
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
 }
 
 function getSessionDate(session: TrainingSessionDoc) {
@@ -84,10 +118,16 @@ function getSessionAverage(session: TrainingSessionDoc) {
     return session.sessionAveragePercentage;
   }
 
-  const attempted = (session.results || []).filter((result) => result.attempts.length > 0);
+  const attempted = (session.results || []).filter(
+    (result) => result.attempts.length > 0
+  );
+
   if (attempted.length === 0) return 0;
 
-  return attempted.reduce((sum, result) => sum + (result.percentage || 0), 0) / attempted.length;
+  return (
+    attempted.reduce((sum, result) => sum + (result.percentage || 0), 0) /
+    attempted.length
+  );
 }
 
 function clamp(value: number) {
@@ -98,9 +138,11 @@ function getWeekStart() {
   const now = new Date();
   const day = now.getDay();
   const diff = day === 0 ? 6 : day - 1;
+
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
   start.setDate(start.getDate() - diff);
+
   return start;
 }
 
@@ -117,8 +159,15 @@ export default function HomePage() {
 
   const [sessions, setSessions] = useState<TrainingSessionDoc[]>([]);
   const [exercises, setExercises] = useState<ExerciseDoc[]>([]);
+  const [activityCalendar, setActivityCalendar] = useState<ActivityCalendarDoc[]>([]);
   const [programCount, setProgramCount] = useState(0);
   const [loading, setLoading] = useState(true);
+
+  const [selectedMonth, setSelectedMonth] = useState(new Date());
+  const [selectedDate, setSelectedDate] = useState("");
+  const [activityType, setActivityType] = useState<ActivityType>("match");
+  const [activityNotes, setActivityNotes] = useState("");
+  const [savingActivity, setSavingActivity] = useState(false);
 
   async function loadDashboard() {
     if (!user) {
@@ -173,9 +222,25 @@ export default function HomePage() {
       query(collection(db, "trainingPrograms"), where("userId", "==", user.uid))
     );
 
+    let loadedActivities: ActivityCalendarDoc[] = [];
+
+    try {
+      const activitySnapshot = await getDocs(
+        query(collection(db, "activityCalendar"), where("userId", "==", user.uid))
+      );
+
+      loadedActivities = activitySnapshot.docs.map((document) => ({
+        id: document.id,
+        ...document.data(),
+      })) as ActivityCalendarDoc[];
+    } catch (error) {
+      console.error("Nie udało się pobrać kalendarza aktywności:", error);
+    }
+
     setSessions(loadedSessions);
     setExercises(allExercises);
     setProgramCount(programsSnapshot.size);
+    setActivityCalendar(loadedActivities);
     setLoading(false);
   }
 
@@ -251,7 +316,8 @@ export default function HomePage() {
   }, [exercises]);
 
   const categorySummary = useMemo(() => {
-    const summary: Record<string, { category: string; total: number; count: number }> = {};
+    const summary: Record<string, { category: string; total: number; count: number }> =
+      {};
 
     completedSessions.forEach((session) => {
       (session.results || []).forEach((result) => {
@@ -310,7 +376,10 @@ export default function HomePage() {
         summary[result.exerciseId].attempts += result.attempts.length;
         summary[result.exerciseId].sessions += 1;
         summary[result.exerciseId].totalPercentage += result.percentage || 0;
-        summary[result.exerciseId].best = Math.max(summary[result.exerciseId].best, result.best || 0);
+        summary[result.exerciseId].best = Math.max(
+          summary[result.exerciseId].best,
+          result.best || 0
+        );
       });
     });
 
@@ -349,61 +418,146 @@ export default function HomePage() {
     });
   }, [completedSessions]);
 
-  const weeklyProgress = Math.min(100, (weeklyCompletedSessions.length / WEEKLY_GOAL) * 100);
+  const weeklyProgress = Math.min(
+    100,
+    (weeklyCompletedSessions.length / WEEKLY_GOAL) * 100
+  );
 
-  const heatmapDays = useMemo(() => {
-    const days = [];
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+  const calendarMonth = useMemo(() => {
+    const year = selectedMonth.getFullYear();
+    const month = selectedMonth.getMonth();
 
-    const counts: Record<string, number> = {};
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+
+    const trainingCounts: Record<string, number> = {};
+    const activityMap: Record<string, ActivityCalendarDoc[]> = {};
 
     completedSessions.forEach((session) => {
       const date = getSessionDate(session);
       if (!date) return;
 
       const key = getDateKey(date);
-      counts[key] = (counts[key] || 0) + 1;
+      trainingCounts[key] = (trainingCounts[key] || 0) + 1;
     });
 
-    for (let i = 27; i >= 0; i -= 1) {
-      const date = new Date(today);
-      date.setDate(today.getDate() - i);
+    activityCalendar.forEach((activity) => {
+      if (!activityMap[activity.date]) {
+        activityMap[activity.date] = [];
+      }
 
+      activityMap[activity.date].push(activity);
+    });
+
+    const firstWeekday = firstDay.getDay() === 0 ? 6 : firstDay.getDay() - 1;
+    const days = [];
+
+    for (let day = 1; day <= lastDay.getDate(); day += 1) {
+      const date = new Date(year, month, day);
       const key = getDateKey(date);
+
       days.push({
         key,
-        label: new Intl.DateTimeFormat("pl-PL", {
-          weekday: "short",
-          day: "numeric",
-          month: "short",
-        }).format(date),
-        count: counts[key] || 0,
+        date,
+        trainingCount: trainingCounts[key] || 0,
+        activities: activityMap[key] || [],
       });
     }
 
-    return days;
-  }, [completedSessions]);
+    return {
+      blanks: Array.from({ length: firstWeekday }),
+      days,
+    };
+  }, [selectedMonth, completedSessions, activityCalendar]);
+
+  const selectedDayData = useMemo(() => {
+    if (!selectedDate) return null;
+
+    const trainingCount = completedSessions.filter((session) => {
+      const date = getSessionDate(session);
+      return date && getDateKey(date) === selectedDate;
+    }).length;
+
+    const activities = activityCalendar.filter((activity) => activity.date === selectedDate);
+
+    return {
+      trainingCount,
+      activities,
+    };
+  }, [selectedDate, completedSessions, activityCalendar]);
 
   const activityFeed = useMemo(() => {
-    const items = completedSessions
+    const sessionItems = completedSessions
       .map((session) => ({
         id: session.id,
         programId: session.programId,
         date: getSessionDate(session),
         title: `Ukończono trening "${session.programName || "Trening"}"`,
         subtitle: `Średnia skuteczność: ${getSessionAverage(session).toFixed(1)}%`,
+        type: "training" as const,
       }))
-      .filter((item) => item.date)
+      .filter((item) => item.date);
+
+    const manualItems = activityCalendar.map((activity) => ({
+      id: activity.id,
+      programId: "",
+      date: activity.date ? new Date(`${activity.date}T12:00:00`) : null,
+      title: `Dodano: ${activityLabels[activity.type]}`,
+      subtitle: activity.notes || "Brak notatki",
+      type: activity.type,
+    }));
+
+    return [...sessionItems, ...manualItems]
       .sort((a, b) => (b.date?.getTime() || 0) - (a.date?.getTime() || 0))
       .slice(0, 5);
-
-    return items;
-  }, [completedSessions]);
+  }, [completedSessions, activityCalendar]);
 
   const focusCategory = weakExercises[0]?.exerciseId
     ? exercises.find((exercise) => exercise.id === weakExercises[0].exerciseId)?.category
     : categorySummary[categorySummary.length - 1]?.category;
+
+  async function saveActivity() {
+    if (!user || !selectedDate) return;
+
+    const trimmedNotes = activityNotes.trim();
+    const fallbackText = `${activityLabels[activityType]} — ${formatCalendarDate(selectedDate)}`;
+    const textToSave = trimmedNotes || fallbackText;
+
+    setSavingActivity(true);
+
+    try {
+      await addDoc(collection(db, "activityCalendar"), {
+        userId: user.uid,
+        type: activityType,
+        date: selectedDate,
+        notes: trimmedNotes,
+        createdAt: serverTimestamp(),
+      });
+
+      await addDoc(collection(db, "reflections"), {
+        userId: user.uid,
+        text: textToSave,
+        type: "general",
+        activityType,
+        activityDate: selectedDate,
+        createdAt: serverTimestamp(),
+      });
+
+      setActivityNotes("");
+      await loadDashboard();
+    } catch (error) {
+      console.error(error);
+      alert("Błąd zapisu aktywności.");
+    } finally {
+      setSavingActivity(false);
+    }
+  }
+
+  function closeActivityModal() {
+    setSelectedDate("");
+    setActivityNotes("");
+    setActivityType("match");
+  }
 
   return (
     <LoginRequired>
@@ -415,10 +569,11 @@ export default function HomePage() {
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
                 <p className="text-sm font-bold text-orange-300">{getGreeting()} 👋</p>
-                <h1 className="mt-1 text-3xl font-black">Gotowa na dzisiejszy trening?</h1>
+                <h1 className="mt-1 text-3xl font-black">
+                  Gotowa na dzisiejszy trening?
+                </h1>
                 <p className="mt-2 max-w-2xl text-slate-300">
-                  Śledź progres, kontynuuj sesje i pracuj nad kategoriami, które najbardziej
-                  potrzebują powtórek.
+                  Śledź progres, kontynuuj sesje i zapisuj treningi, sparingi, turnieje oraz notatki.
                 </p>
               </div>
 
@@ -448,8 +603,8 @@ export default function HomePage() {
                 Masz niedokończony trening
               </h2>
               <p className="mt-2 text-orange-800">
-                {inProgressSession.programName || "Trening w toku"} · ostatnia aktualizacja:{" "}
-                {formatDate(inProgressSession.updatedAt)}
+                {inProgressSession.programName || "Trening w toku"} · ostatnia
+                aktualizacja: {formatDate(inProgressSession.updatedAt)}
               </p>
 
               <Link
@@ -462,10 +617,10 @@ export default function HomePage() {
           )}
 
           <div className="grid gap-4 md:grid-cols-5">
-          <div className="rounded-2xl bg-white p-5 shadow">
-  <p className="text-sm text-slate-500">Próby</p>
-  <p className="text-3xl font-black">{totalAttempts}</p>
-</div>
+            <div className="rounded-2xl bg-white p-5 shadow">
+              <p className="text-sm text-slate-500">Próby</p>
+              <p className="text-3xl font-black">{totalAttempts}</p>
+            </div>
 
             <div className="rounded-2xl bg-white p-5 shadow">
               <p className="text-sm text-slate-500">Treningi</p>
@@ -556,53 +711,146 @@ export default function HomePage() {
             </div>
           </div>
 
-          <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
             <div className="rounded-2xl bg-white p-6 shadow">
-              <h2 className="text-xl font-bold">Heatmap treningów</h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Ostatnie 28 dni aktywności treningowej
-              </p>
+              <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h2 className="text-xl font-bold">Kalendarz aktywności</h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Kliknij dzień, żeby dodać sparing, turniej albo notatkę.
+                  </p>
+                </div>
 
-              <div className="mt-5 grid grid-cols-7 gap-2">
-  {heatmapDays.map((day) => (
-    <div
-      key={day.key}
-      title={`${day.label}: ${day.count} treningów`}
-      className={`rounded-lg border p-2 text-center text-xs ${
-        day.count === 0
-          ? "bg-slate-100 text-slate-500"
-          : day.count === 1
-            ? "bg-orange-200 text-orange-900"
-            : day.count === 2
-              ? "bg-orange-400 text-white"
-              : "bg-orange-600 text-white"
-      }`}
-    >
-      <div className="font-bold">
-        {new Date(day.key).toLocaleDateString("pl-PL", { weekday: "short" })}
-      </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSelectedMonth(
+                        new Date(
+                          selectedMonth.getFullYear(),
+                          selectedMonth.getMonth() - 1,
+                          1
+                        )
+                      )
+                    }
+                    className="rounded bg-slate-200 px-3 py-2 font-bold hover:bg-slate-300"
+                  >
+                    ←
+                  </button>
 
-      <div>
-        {new Date(day.key).toLocaleDateString("pl-PL", {
-          day: "2-digit",
-          month: "2-digit",
-        })}
-      </div>
+                  <span className="min-w-[160px] text-center font-bold">
+                    {selectedMonth.toLocaleDateString("pl-PL", {
+                      month: "long",
+                      year: "numeric",
+                    })}
+                  </span>
 
-      <div className="mt-1 text-[10px] font-bold">
-        {day.count > 0 ? `${day.count}x` : "-"}
-      </div>
-    </div>
-  ))}
-</div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSelectedMonth(
+                        new Date(
+                          selectedMonth.getFullYear(),
+                          selectedMonth.getMonth() + 1,
+                          1
+                        )
+                      )
+                    }
+                    className="rounded bg-slate-200 px-3 py-2 font-bold hover:bg-slate-300"
+                  >
+                    →
+                  </button>
+                </div>
+              </div>
 
-              <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
-                <span>Mniej</span>
-                <span className="h-3 w-3 rounded bg-slate-100" />
-                <span className="h-3 w-3 rounded bg-orange-200" />
-                <span className="h-3 w-3 rounded bg-orange-400" />
-                <span className="h-3 w-3 rounded bg-orange-600" />
-                <span>Więcej</span>
+              <div className="mb-2 grid grid-cols-7 gap-2 text-center text-xs font-bold text-slate-500">
+                <div>Pon</div>
+                <div>Wt</div>
+                <div>Śr</div>
+                <div>Czw</div>
+                <div>Pt</div>
+                <div>Sob</div>
+                <div>Nd</div>
+              </div>
+
+              <div className="grid grid-cols-7 gap-2">
+                {calendarMonth.blanks.map((_, index) => (
+                  <div key={`blank-${index}`} className="min-h-[84px]" />
+                ))}
+
+                {calendarMonth.days.map((day) => {
+                  const hasTraining = day.trainingCount > 0;
+                  const hasMatch = day.activities.some(
+                    (activity) => activity.type === "match"
+                  );
+                  const hasTournament = day.activities.some(
+                    (activity) => activity.type === "tournament"
+                  );
+                  const hasNote = day.activities.some(
+                    (activity) => activity.type === "note"
+                  );
+
+                  return (
+                    <button
+                      key={day.key}
+                      type="button"
+                      onClick={() => setSelectedDate(day.key)}
+                      className="min-h-[84px] rounded-lg border bg-slate-50 p-2 text-left text-xs transition hover:bg-orange-50 hover:ring-2 hover:ring-orange-400"
+                    >
+                      <div className="mb-2 font-black text-slate-700">
+                        {day.date.getDate()}
+                      </div>
+
+                      <div className="flex flex-wrap gap-1">
+                        {hasTraining && (
+                          <span className="rounded-full bg-orange-500 px-2 py-1 text-[10px] font-bold text-white">
+                            T {day.trainingCount}
+                          </span>
+                        )}
+
+                        {hasMatch && (
+                          <span className="rounded-full bg-blue-500 px-2 py-1 text-[10px] font-bold text-white">
+                            S
+                          </span>
+                        )}
+
+                        {hasTournament && (
+                          <span className="rounded-full bg-purple-600 px-2 py-1 text-[10px] font-bold text-white">
+                            Turniej
+                          </span>
+                        )}
+
+                        {hasNote && (
+                          <span className="rounded-full bg-green-600 px-2 py-1 text-[10px] font-bold text-white">
+                            N
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-3 text-xs text-slate-600">
+                <span className="flex items-center gap-1">
+                  <span className="h-3 w-3 rounded-full bg-orange-500" />
+                  Trening
+                </span>
+
+                <span className="flex items-center gap-1">
+                  <span className="h-3 w-3 rounded-full bg-blue-500" />
+                  Sparing
+                </span>
+
+                <span className="flex items-center gap-1">
+                  <span className="h-3 w-3 rounded-full bg-purple-600" />
+                  Turniej
+                </span>
+
+                <span className="flex items-center gap-1">
+                  <span className="h-3 w-3 rounded-full bg-green-600" />
+                  Notatka
+                </span>
               </div>
             </div>
 
@@ -614,28 +862,29 @@ export default function HomePage() {
               ) : (
                 <div className="mt-4 space-y-3">
                   {activityFeed.map((item) => (
-  <div key={item.id} className="rounded-xl bg-slate-50 p-4">
-    <p className="font-bold">{item.title}</p>
+                    <div key={item.id} className="rounded-xl bg-slate-50 p-4">
+                      <p className="font-bold">{item.title}</p>
+                      <p className="text-sm text-slate-600">{item.subtitle}</p>
 
-    <p className="text-sm text-slate-600">{item.subtitle}</p>
+                      <p className="mt-1 text-xs text-slate-400">
+                        {item.date
+                          ? new Intl.DateTimeFormat("pl-PL", {
+                              dateStyle: "medium",
+                              timeStyle: "short",
+                            }).format(item.date)
+                          : "-"}
+                      </p>
 
-    <p className="mt-1 text-xs text-slate-400">
-      {item.date
-        ? new Intl.DateTimeFormat("pl-PL", {
-            dateStyle: "medium",
-            timeStyle: "short",
-          }).format(item.date)
-        : "-"}
-    </p>
-
-    <Link
-      href={`/practice/${item.programId}`}
-      className="mt-4 inline-block rounded-lg bg-orange-600 px-4 py-2 text-sm font-bold text-white hover:bg-orange-500"
-    >
-      Powtórz trening
-    </Link>
-  </div>
-))}
+                      {item.type === "training" && item.programId && (
+                        <Link
+                          href={`/practice/${item.programId}`}
+                          className="mt-4 inline-block rounded-lg bg-orange-600 px-4 py-2 text-sm font-bold text-white hover:bg-orange-500"
+                        >
+                          Powtórz trening
+                        </Link>
+                      )}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -767,7 +1016,8 @@ export default function HomePage() {
                   {topExercises.map((exercise, index) => (
                     <div key={exercise.exerciseId} className="rounded-xl bg-green-50 p-4">
                       <p className="font-black">
-                        {index + 1}. {exerciseNames[exercise.exerciseId] || "Ćwiczenie"}
+                        {index + 1}.{" "}
+                        {exerciseNames[exercise.exerciseId] || "Ćwiczenie"}
                       </p>
                       <p className="text-sm text-green-800">
                         Średnio: {exercise.averagePercentage.toFixed(1)}% · Próby:{" "}
@@ -789,7 +1039,8 @@ export default function HomePage() {
                   {weakExercises.map((exercise, index) => (
                     <div key={exercise.exerciseId} className="rounded-xl bg-red-50 p-4">
                       <p className="font-black">
-                        {index + 1}. {exerciseNames[exercise.exerciseId] || "Ćwiczenie"}
+                        {index + 1}.{" "}
+                        {exerciseNames[exercise.exerciseId] || "Ćwiczenie"}
                       </p>
                       <p className="text-sm text-red-800">
                         Średnio: {exercise.averagePercentage.toFixed(1)}% · Próby:{" "}
@@ -815,16 +1066,117 @@ export default function HomePage() {
               <p className="mt-1 text-sm text-slate-500">
                 Próby łącznie: {totalAttempts}
               </p>
+
+              <Link
+                href={`/practice/${lastCompletedSession.programId}`}
+                className="mt-4 inline-block rounded-lg bg-orange-600 px-4 py-2 text-sm font-bold text-white hover:bg-orange-500"
+              >
+                Powtórz ostatni trening
+              </Link>
             </div>
           )}
 
-<Link
-  href="/reflections"
-  className="fixed bottom-6 right-6 z-50 rounded-full bg-orange-600 px-5 py-4 font-black text-white shadow-xl hover:bg-orange-500"
->
-  💭 Przemyślenia
-</Link>
+          {selectedDate && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+              <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+                <h2 className="text-2xl font-black">Dzień w kalendarzu</h2>
 
+                <p className="mt-2 text-slate-600">
+                  <strong>{formatCalendarDate(selectedDate)}</strong>
+                </p>
+
+                {selectedDayData && (
+                  <div className="mt-4 rounded-xl bg-slate-50 p-4">
+                    <p className="mb-2 text-sm font-bold text-slate-700">
+                      Aktywności tego dnia:
+                    </p>
+
+                    {selectedDayData.trainingCount === 0 &&
+                    selectedDayData.activities.length === 0 ? (
+                      <p className="text-sm text-slate-500">
+                        Brak zapisanych aktywności.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {selectedDayData.trainingCount > 0 && (
+                          <div className="rounded bg-orange-100 px-3 py-2 text-sm font-bold text-orange-800">
+                            Trening: {selectedDayData.trainingCount}
+                          </div>
+                        )}
+
+                        {selectedDayData.activities.map((activity) => (
+                          <div
+                            key={activity.id}
+                            className={`rounded px-3 py-2 text-sm font-bold ${
+                              activity.type === "match"
+                                ? "bg-blue-100 text-blue-800"
+                                : activity.type === "tournament"
+                                  ? "bg-purple-100 text-purple-800"
+                                  : "bg-green-100 text-green-800"
+                            }`}
+                          >
+                            {activityLabels[activity.type]}
+                            {activity.notes ? ` — ${activity.notes}` : ""}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="mt-5">
+                  <label className="mb-2 block text-sm font-bold text-slate-700">
+                    Dodaj aktywność
+                  </label>
+
+                  <select
+                    value={activityType}
+                    onChange={(event) =>
+                      setActivityType(event.target.value as ActivityType)
+                    }
+                    className="w-full rounded border p-3"
+                  >
+                    <option value="match">Sparing</option>
+                    <option value="tournament">Turniej</option>
+                    <option value="note">Notatka</option>
+                  </select>
+
+                  <textarea
+                    value={activityNotes}
+                    onChange={(event) => setActivityNotes(event.target.value)}
+                    placeholder="Dodaj notatkę, wynik, przeciwnika, obserwacje..."
+                    className="mt-4 min-h-[120px] w-full rounded border p-3"
+                  />
+                </div>
+
+                <div className="mt-5 flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    onClick={saveActivity}
+                    disabled={savingActivity}
+                    className="rounded bg-orange-600 px-5 py-3 font-bold text-white hover:bg-orange-500 disabled:opacity-60"
+                  >
+                    {savingActivity ? "Zapisywanie..." : "Zapisz"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={closeActivityModal}
+                    className="rounded bg-slate-200 px-5 py-3 font-bold text-slate-800 hover:bg-slate-300"
+                  >
+                    Zamknij
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <Link
+            href="/reflections"
+            className="fixed bottom-6 right-6 z-40 rounded-full bg-orange-600 px-5 py-4 font-black text-white shadow-xl hover:bg-orange-500"
+          >
+            💭 Przemyślenia
+          </Link>
         </section>
       )}
     </LoginRequired>

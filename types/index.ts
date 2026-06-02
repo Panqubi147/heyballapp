@@ -67,7 +67,11 @@ export type TrainingSessionResult = {
   maxScore?: number;
   percentage?: number;
 };
-
+export type ActivityType =
+  | "training"
+  | "match"
+  | "tournament";
+  
 export type TrainingSession = {
   id?: string;
   userId: string;
