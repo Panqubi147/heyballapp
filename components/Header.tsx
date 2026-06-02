@@ -9,6 +9,7 @@ const items = [
   { href: "/exercises", label: "Ćwiczenia" },
   { href: "/programs", label: "Treningi" },
   { href: "/stats", label: "Statystyki" },
+  { href: "/mental", label: "Mental" },
 ];
 
 export function Header() {
