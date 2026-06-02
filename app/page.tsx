@@ -5,9 +5,12 @@ import { useEffect, useMemo, useState } from "react";
 import {
   addDoc,
   collection,
+  deleteDoc,
+  doc,
   getDocs,
   query,
   serverTimestamp,
+  updateDoc,
   where,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
@@ -57,6 +60,7 @@ type ActivityCalendarDoc = {
   type: ActivityType;
   date: string;
   notes?: string;
+  reflectionId?: string;
   createdAt?: FirestoreTimestamp;
 };
 
@@ -168,6 +172,7 @@ export default function HomePage() {
   const [activityType, setActivityType] = useState<ActivityType>("match");
   const [activityNotes, setActivityNotes] = useState("");
   const [savingActivity, setSavingActivity] = useState(false);
+  const [editingActivityId, setEditingActivityId] = useState<string | null>(null);
 
   async function loadDashboard() {
     if (!user) {
@@ -516,48 +521,97 @@ export default function HomePage() {
     ? exercises.find((exercise) => exercise.id === weakExercises[0].exerciseId)?.category
     : categorySummary[categorySummary.length - 1]?.category;
 
-  async function saveActivity() {
-    if (!user || !selectedDate) return;
-
-    const trimmedNotes = activityNotes.trim();
-    const fallbackText = `${activityLabels[activityType]} — ${formatCalendarDate(selectedDate)}`;
-    const textToSave = trimmedNotes || fallbackText;
-
-    setSavingActivity(true);
-
-    try {
-      await addDoc(collection(db, "activityCalendar"), {
-        userId: user.uid,
-        type: activityType,
-        date: selectedDate,
-        notes: trimmedNotes,
-        createdAt: serverTimestamp(),
-      });
-
-      await addDoc(collection(db, "reflections"), {
-        userId: user.uid,
-        text: textToSave,
-        type: "general",
-        activityType,
-        activityDate: selectedDate,
-        createdAt: serverTimestamp(),
-      });
-
-      setActivityNotes("");
-      await loadDashboard();
-    } catch (error) {
-      console.error(error);
-      alert("Błąd zapisu aktywności.");
-    } finally {
-      setSavingActivity(false);
+    async function saveActivity() {
+      if (!user || !selectedDate) return;
+    
+      const trimmedNotes = activityNotes.trim();
+      const fallbackText = `${activityLabels[activityType]} — ${formatCalendarDate(selectedDate)}`;
+      const textToSave = trimmedNotes || fallbackText;
+    
+      setSavingActivity(true);
+    
+      try {
+        if (editingActivityId) {
+          const activity = activityCalendar.find((item) => item.id === editingActivityId);
+    
+          await updateDoc(doc(db, "activityCalendar", editingActivityId), {
+            type: activityType,
+            notes: trimmedNotes,
+            updatedAt: serverTimestamp(),
+          });
+    
+          if (activity?.reflectionId) {
+            await updateDoc(doc(db, "reflections", activity.reflectionId), {
+              text: textToSave,
+              activityType,
+              activityDate: selectedDate,
+              updatedAt: serverTimestamp(),
+            });
+          }
+        } else {
+          const reflectionRef = await addDoc(collection(db, "reflections"), {
+            userId: user.uid,
+            text: textToSave,
+            type: "general",
+            activityType,
+            activityDate: selectedDate,
+            createdAt: serverTimestamp(),
+          });
+    
+          await addDoc(collection(db, "activityCalendar"), {
+            userId: user.uid,
+            type: activityType,
+            date: selectedDate,
+            notes: trimmedNotes,
+            reflectionId: reflectionRef.id,
+            createdAt: serverTimestamp(),
+          });
+        }
+    
+        setActivityNotes("");
+        setEditingActivityId(null);
+        await loadDashboard();
+      } catch (error) {
+        console.error(error);
+        alert("Błąd zapisu aktywności.");
+      } finally {
+        setSavingActivity(false);
+      }
     }
-  }
-
-  function closeActivityModal() {
-    setSelectedDate("");
-    setActivityNotes("");
-    setActivityType("match");
-  }
+    function startEditActivity(activity: ActivityCalendarDoc) {
+      setEditingActivityId(activity.id);
+      setActivityType(activity.type);
+      setActivityNotes(activity.notes || "");
+    }
+    
+    async function deleteActivity(activity: ActivityCalendarDoc) {
+      const confirmed = confirm(`Usunąć wpis "${activityLabels[activity.type]}"?`);
+      if (!confirmed) return;
+    
+      try {
+        await deleteDoc(doc(db, "activityCalendar", activity.id));
+    
+        if (activity.reflectionId) {
+          await deleteDoc(doc(db, "reflections", activity.reflectionId));
+        }
+    
+        if (editingActivityId === activity.id) {
+          setEditingActivityId(null);
+          setActivityNotes("");
+        }
+    
+        await loadDashboard();
+      } catch (error) {
+        console.error(error);
+        alert("Błąd usuwania aktywności.");
+      }
+    }
+    function closeActivityModal() {
+      setSelectedDate("");
+      setActivityNotes("");
+      setActivityType("match");
+      setEditingActivityId(null);
+    }
 
   return (
     <LoginRequired>
@@ -1104,30 +1158,54 @@ export default function HomePage() {
                           </div>
                         )}
 
-                        {selectedDayData.activities.map((activity) => (
-                          <div
-                            key={activity.id}
-                            className={`rounded px-3 py-2 text-sm font-bold ${
-                              activity.type === "match"
-                                ? "bg-blue-100 text-blue-800"
-                                : activity.type === "tournament"
-                                  ? "bg-purple-100 text-purple-800"
-                                  : "bg-green-100 text-green-800"
-                            }`}
-                          >
-                            {activityLabels[activity.type]}
-                            {activity.notes ? ` — ${activity.notes}` : ""}
-                          </div>
-                        ))}
+{selectedDayData.activities.map((activity) => (
+  <div
+    key={activity.id}
+    className={`rounded px-3 py-2 text-sm ${
+      activity.type === "match"
+        ? "bg-blue-100 text-blue-800"
+        : activity.type === "tournament"
+          ? "bg-purple-100 text-purple-800"
+          : "bg-green-100 text-green-800"
+    }`}
+  >
+    <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+      <div>
+        <p className="font-bold">{activityLabels[activity.type]}</p>
+        {activity.notes && (
+          <p className="mt-1 whitespace-pre-wrap text-sm">{activity.notes}</p>
+        )}
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => startEditActivity(activity)}
+          className="rounded bg-white/70 px-3 py-1 text-xs font-bold hover:bg-white"
+        >
+          Edytuj
+        </button>
+
+        <button
+          type="button"
+          onClick={() => deleteActivity(activity)}
+          className="rounded bg-red-600 px-3 py-1 text-xs font-bold text-white hover:bg-red-500"
+        >
+          Usuń
+        </button>
+      </div>
+    </div>
+  </div>
+))}
                       </div>
                     )}
                   </div>
                 )}
 
                 <div className="mt-5">
-                  <label className="mb-2 block text-sm font-bold text-slate-700">
-                    Dodaj aktywność
-                  </label>
+                <label className="mb-2 block text-sm font-bold text-slate-700">
+  {editingActivityId ? "Edytuj aktywność" : "Dodaj aktywność"}
+</label>
 
                   <select
                     value={activityType}
@@ -1156,7 +1234,11 @@ export default function HomePage() {
                     disabled={savingActivity}
                     className="rounded bg-orange-600 px-5 py-3 font-bold text-white hover:bg-orange-500 disabled:opacity-60"
                   >
-                    {savingActivity ? "Zapisywanie..." : "Zapisz"}
+                    {savingActivity
+  ? "Zapisywanie..."
+  : editingActivityId
+    ? "Zapisz zmiany"
+    : "Zapisz"}
                   </button>
 
                   <button
