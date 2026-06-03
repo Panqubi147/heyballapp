@@ -64,7 +64,34 @@ type ActivityCalendarDoc = {
   createdAt?: FirestoreTimestamp;
 };
 
-const WEEKLY_GOAL = 3;
+type WeeklyGoal = {
+  id: string;
+  userId: string;
+  weekKey: string;
+  title: string;
+  completed: boolean;
+  createdAt?: FirestoreTimestamp;
+  updatedAt?: FirestoreTimestamp;
+};
+
+type DashboardSetting = {
+  id: string;
+  userId: string;
+  type?: string;
+  weeklyTrainingGoal?: number;
+  createdAt?: FirestoreTimestamp;
+  updatedAt?: FirestoreTimestamp;
+};
+
+const DEFAULT_WEEKLY_GOAL = 3;
+
+const quickGoalTemplates = [
+  "Zagrać sparing",
+  "Trening techniczny",
+  "Trening mentalny",
+  "Analiza meczu",
+  "Turniej",
+];
 
 const categoryLabels: Record<string, string> = {
   potting: "Wbijanie",
@@ -150,6 +177,10 @@ function getWeekStart() {
   return start;
 }
 
+function getWeekKey() {
+  return getDateKey(getWeekStart());
+}
+
 function getGreeting() {
   const hour = new Date().getHours();
 
@@ -165,6 +196,15 @@ export default function HomePage() {
   const [exercises, setExercises] = useState<ExerciseDoc[]>([]);
   const [activityCalendar, setActivityCalendar] = useState<ActivityCalendarDoc[]>([]);
   const [programCount, setProgramCount] = useState(0);
+
+  const [weeklyTrainingGoal, setWeeklyTrainingGoal] = useState(DEFAULT_WEEKLY_GOAL);
+  const [weeklySettingId, setWeeklySettingId] = useState<string | null>(null);
+  const [weeklyTargetInput, setWeeklyTargetInput] = useState(String(DEFAULT_WEEKLY_GOAL));
+  const [editingGoals, setEditingGoals] = useState(false);
+  const [weeklyGoals, setWeeklyGoals] = useState<WeeklyGoal[]>([]);
+  const [newWeeklyGoalTitle, setNewWeeklyGoalTitle] = useState("");
+  const [savingWeeklyGoal, setSavingWeeklyGoal] = useState(false);
+
   const [loading, setLoading] = useState(true);
 
   const [selectedMonth, setSelectedMonth] = useState(new Date());
@@ -242,10 +282,66 @@ export default function HomePage() {
       console.error("Nie udało się pobrać kalendarza aktywności:", error);
     }
 
+    let loadedWeeklyGoal = DEFAULT_WEEKLY_GOAL;
+    let loadedWeeklySettingId: string | null = null;
+
+    try {
+      const settingsSnapshot = await getDocs(
+        query(collection(db, "userSettings"), where("userId", "==", user.uid))
+      );
+
+      const dashboardSettings = settingsSnapshot.docs.map((document) => ({
+        id: document.id,
+        ...document.data(),
+      })) as DashboardSetting[];
+
+      const setting =
+        dashboardSettings.find((item) => item.type === "dashboard") ||
+        dashboardSettings[0];
+
+      if (setting) {
+        loadedWeeklySettingId = setting.id;
+
+        if (
+          typeof setting.weeklyTrainingGoal === "number" &&
+          setting.weeklyTrainingGoal > 0
+        ) {
+          loadedWeeklyGoal = setting.weeklyTrainingGoal;
+        }
+      }
+    } catch (error) {
+      console.error("Nie udało się pobrać ustawień dashboardu:", error);
+    }
+
+    let loadedWeeklyGoals: WeeklyGoal[] = [];
+
+    try {
+      const weeklyGoalsSnapshot = await getDocs(
+        query(collection(db, "weeklyGoals"), where("userId", "==", user.uid))
+      );
+
+      const currentWeekKey = getWeekKey();
+
+      loadedWeeklyGoals = weeklyGoalsSnapshot.docs.map((document) => ({
+        id: document.id,
+        ...document.data(),
+      })) as WeeklyGoal[];
+
+      loadedWeeklyGoals = loadedWeeklyGoals.filter(
+        (goal) => goal.weekKey === currentWeekKey
+      );
+    } catch (error) {
+      console.error("Nie udało się pobrać celów tygodniowych:", error);
+    }
+
     setSessions(loadedSessions);
     setExercises(allExercises);
     setProgramCount(programsSnapshot.size);
     setActivityCalendar(loadedActivities);
+    setWeeklyTrainingGoal(loadedWeeklyGoal);
+    setWeeklyTargetInput(String(loadedWeeklyGoal));
+    setWeeklySettingId(loadedWeeklySettingId);
+    setWeeklyGoals(loadedWeeklyGoals);
     setLoading(false);
   }
 
@@ -425,8 +521,28 @@ export default function HomePage() {
 
   const weeklyProgress = Math.min(
     100,
-    (weeklyCompletedSessions.length / WEEKLY_GOAL) * 100
+    (weeklyCompletedSessions.length / Math.max(1, weeklyTrainingGoal)) * 100
   );
+
+  const completedCustomGoalsCount = useMemo(() => {
+    return weeklyGoals.filter((goal) => goal.completed).length;
+  }, [weeklyGoals]);
+
+  const trainingGoalProgress = Math.min(
+    100,
+    (weeklyCompletedSessions.length / Math.max(1, weeklyTrainingGoal)) * 100
+  );
+  
+  const customGoalsProgress =
+  weeklyGoals.length > 0
+    ? (completedCustomGoalsCount / weeklyGoals.length) * 100
+    : null;
+
+const overallWeeklyGoalProgress = Math.round(
+  customGoalsProgress === null
+    ? trainingGoalProgress
+    : (trainingGoalProgress + customGoalsProgress) / 2
+);
 
   const calendarMonth = useMemo(() => {
     const year = selectedMonth.getFullYear();
@@ -521,97 +637,199 @@ export default function HomePage() {
     ? exercises.find((exercise) => exercise.id === weakExercises[0].exerciseId)?.category
     : categorySummary[categorySummary.length - 1]?.category;
 
-    async function saveActivity() {
-      if (!user || !selectedDate) return;
-    
-      const trimmedNotes = activityNotes.trim();
-      const fallbackText = `${activityLabels[activityType]} — ${formatCalendarDate(selectedDate)}`;
-      const textToSave = trimmedNotes || fallbackText;
-    
-      setSavingActivity(true);
-    
-      try {
-        if (editingActivityId) {
-          const activity = activityCalendar.find((item) => item.id === editingActivityId);
-    
-          await updateDoc(doc(db, "activityCalendar", editingActivityId), {
-            type: activityType,
-            notes: trimmedNotes,
-            updatedAt: serverTimestamp(),
-          });
-    
-          if (activity?.reflectionId) {
-            await updateDoc(doc(db, "reflections", activity.reflectionId), {
-              text: textToSave,
-              activityType,
-              activityDate: selectedDate,
-              updatedAt: serverTimestamp(),
-            });
-          }
-        } else {
-          const reflectionRef = await addDoc(collection(db, "reflections"), {
-            userId: user.uid,
+  async function saveWeeklyTrainingTarget() {
+    if (!user) return;
+
+    const parsedTarget = Math.max(
+      1,
+      Math.min(14, Number(weeklyTargetInput) || DEFAULT_WEEKLY_GOAL)
+    );
+
+    setSavingWeeklyGoal(true);
+
+    try {
+      if (weeklySettingId) {
+        await updateDoc(doc(db, "userSettings", weeklySettingId), {
+          weeklyTrainingGoal: parsedTarget,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        const settingRef = await addDoc(collection(db, "userSettings"), {
+          userId: user.uid,
+          type: "dashboard",
+          weeklyTrainingGoal: parsedTarget,
+          createdAt: serverTimestamp(),
+        });
+
+        setWeeklySettingId(settingRef.id);
+      }
+
+      setWeeklyTrainingGoal(parsedTarget);
+      setWeeklyTargetInput(String(parsedTarget));
+    } catch (error) {
+      console.error(error);
+      alert("Błąd zapisu celu treningowego.");
+    } finally {
+      setSavingWeeklyGoal(false);
+    }
+  }
+
+  async function addWeeklyGoal(customTitle?: string) {
+    if (!user) return;
+
+    const title = (customTitle || newWeeklyGoalTitle).trim();
+
+    if (!title) {
+      alert("Wpisz cel tygodniowy.");
+      return;
+    }
+
+    setSavingWeeklyGoal(true);
+
+    try {
+      await addDoc(collection(db, "weeklyGoals"), {
+        userId: user.uid,
+        weekKey: getWeekKey(),
+        title,
+        completed: false,
+        createdAt: serverTimestamp(),
+      });
+
+      setNewWeeklyGoalTitle("");
+      await loadDashboard();
+    } catch (error) {
+      console.error(error);
+      alert("Błąd dodawania celu tygodniowego.");
+    } finally {
+      setSavingWeeklyGoal(false);
+    }
+  }
+
+  async function toggleWeeklyGoal(goal: WeeklyGoal) {
+    setWeeklyGoals((prev) =>
+      prev.map((item) =>
+        item.id === goal.id ? { ...item, completed: !goal.completed } : item
+      )
+    );
+
+    try {
+      await updateDoc(doc(db, "weeklyGoals", goal.id), {
+        completed: !goal.completed,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      console.error(error);
+      alert("Nie udało się zaktualizować celu.");
+      await loadDashboard();
+    }
+  }
+
+  async function deleteWeeklyGoal(goal: WeeklyGoal) {
+    const confirmed = confirm(`Usunąć cel "${goal.title}"?`);
+    if (!confirmed) return;
+
+    try {
+      await deleteDoc(doc(db, "weeklyGoals", goal.id));
+      setWeeklyGoals((prev) => prev.filter((item) => item.id !== goal.id));
+    } catch (error) {
+      console.error(error);
+      alert("Nie udało się usunąć celu.");
+    }
+  }
+
+  async function saveActivity() {
+    if (!user || !selectedDate) return;
+
+    const trimmedNotes = activityNotes.trim();
+    const fallbackText = `${activityLabels[activityType]} — ${formatCalendarDate(selectedDate)}`;
+    const textToSave = trimmedNotes || fallbackText;
+
+    setSavingActivity(true);
+
+    try {
+      if (editingActivityId) {
+        const activity = activityCalendar.find((item) => item.id === editingActivityId);
+
+        await updateDoc(doc(db, "activityCalendar", editingActivityId), {
+          type: activityType,
+          notes: trimmedNotes,
+          updatedAt: serverTimestamp(),
+        });
+
+        if (activity?.reflectionId) {
+          await updateDoc(doc(db, "reflections", activity.reflectionId), {
             text: textToSave,
-            type: "general",
             activityType,
             activityDate: selectedDate,
-            createdAt: serverTimestamp(),
-          });
-    
-          await addDoc(collection(db, "activityCalendar"), {
-            userId: user.uid,
-            type: activityType,
-            date: selectedDate,
-            notes: trimmedNotes,
-            reflectionId: reflectionRef.id,
-            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
           });
         }
-    
-        setActivityNotes("");
-        setEditingActivityId(null);
-        await loadDashboard();
-      } catch (error) {
-        console.error(error);
-        alert("Błąd zapisu aktywności.");
-      } finally {
-        setSavingActivity(false);
+      } else {
+        const reflectionRef = await addDoc(collection(db, "reflections"), {
+          userId: user.uid,
+          text: textToSave,
+          type: "general",
+          activityType,
+          activityDate: selectedDate,
+          createdAt: serverTimestamp(),
+        });
+
+        await addDoc(collection(db, "activityCalendar"), {
+          userId: user.uid,
+          type: activityType,
+          date: selectedDate,
+          notes: trimmedNotes,
+          reflectionId: reflectionRef.id,
+          createdAt: serverTimestamp(),
+        });
       }
-    }
-    function startEditActivity(activity: ActivityCalendarDoc) {
-      setEditingActivityId(activity.id);
-      setActivityType(activity.type);
-      setActivityNotes(activity.notes || "");
-    }
-    
-    async function deleteActivity(activity: ActivityCalendarDoc) {
-      const confirmed = confirm(`Usunąć wpis "${activityLabels[activity.type]}"?`);
-      if (!confirmed) return;
-    
-      try {
-        await deleteDoc(doc(db, "activityCalendar", activity.id));
-    
-        if (activity.reflectionId) {
-          await deleteDoc(doc(db, "reflections", activity.reflectionId));
-        }
-    
-        if (editingActivityId === activity.id) {
-          setEditingActivityId(null);
-          setActivityNotes("");
-        }
-    
-        await loadDashboard();
-      } catch (error) {
-        console.error(error);
-        alert("Błąd usuwania aktywności.");
-      }
-    }
-    function closeActivityModal() {
-      setSelectedDate("");
+
       setActivityNotes("");
-      setActivityType("match");
       setEditingActivityId(null);
+      await loadDashboard();
+    } catch (error) {
+      console.error(error);
+      alert("Błąd zapisu aktywności.");
+    } finally {
+      setSavingActivity(false);
     }
+  }
+
+  function startEditActivity(activity: ActivityCalendarDoc) {
+    setEditingActivityId(activity.id);
+    setActivityType(activity.type);
+    setActivityNotes(activity.notes || "");
+  }
+
+  async function deleteActivity(activity: ActivityCalendarDoc) {
+    const confirmed = confirm(`Usunąć wpis "${activityLabels[activity.type]}"?`);
+    if (!confirmed) return;
+
+    try {
+      await deleteDoc(doc(db, "activityCalendar", activity.id));
+
+      if (activity.reflectionId) {
+        await deleteDoc(doc(db, "reflections", activity.reflectionId));
+      }
+
+      if (editingActivityId === activity.id) {
+        setEditingActivityId(null);
+        setActivityNotes("");
+      }
+
+      await loadDashboard();
+    } catch (error) {
+      console.error(error);
+      alert("Błąd usuwania aktywności.");
+    }
+  }
+
+  function closeActivityModal() {
+    setSelectedDate("");
+    setActivityNotes("");
+    setActivityType("match");
+    setEditingActivityId(null);
+  }
 
   return (
     <LoginRequired>
@@ -701,33 +919,189 @@ export default function HomePage() {
 
           <div className="grid gap-6 lg:grid-cols-[1fr_0.9fr]">
             <div className="rounded-2xl bg-white p-6 shadow">
-              <h2 className="text-xl font-bold">Cel tygodnia</h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Automatyczny cel: {WEEKLY_GOAL} zakończone treningi w tygodniu.
-              </p>
-
-              <div className="mt-5 flex items-end justify-between">
+              <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div>
-                  <p className="text-4xl font-black">
-                    {weeklyCompletedSessions.length}/{WEEKLY_GOAL}
+                  <h2 className="text-xl font-bold">Cele tygodnia</h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Twoje aktualne cele na ten tydzień.
                   </p>
-                  <p className="text-sm text-slate-600">treningi ukończone</p>
                 </div>
 
-                <Link
-                  href="/programs"
-                  className="rounded bg-orange-600 px-4 py-2 text-sm font-bold text-white hover:bg-orange-500"
-                >
-                  Zrób trening
-                </Link>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="rounded-xl bg-orange-100 px-4 py-3 text-right">
+                    <p className="text-xs font-bold text-orange-700">Postęp</p>
+                    <p className="text-2xl font-black text-orange-800">
+                      {overallWeeklyGoalProgress}%
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => setEditingGoals((prev) => !prev)}
+                    className="rounded bg-slate-800 px-4 py-3 text-sm font-bold text-white hover:bg-slate-700"
+                  >
+                    {editingGoals ? "Zamknij edycję" : "Edytuj cele"}
+                  </button>
+                </div>
               </div>
 
-              <div className="mt-5 h-4 overflow-hidden rounded-full bg-slate-100">
+              <div className="mb-5 h-4 overflow-hidden rounded-full bg-slate-100">
                 <div
                   className="h-full rounded-full bg-orange-600"
-                  style={{ width: `${weeklyProgress}%` }}
+                  style={{ width: `${overallWeeklyGoalProgress}%` }}
                 />
               </div>
+
+              <div className="space-y-3">
+                <div
+                  className={`rounded-xl border p-4 ${
+                    weeklyCompletedSessions.length >= weeklyTrainingGoal
+                      ? "border-green-300 bg-green-50"
+                      : "border-slate-200 bg-slate-50"
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span
+                      className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-black ${
+                        weeklyCompletedSessions.length >= weeklyTrainingGoal
+                          ? "bg-green-600 text-white"
+                          : "bg-slate-200 text-slate-600"
+                      }`}
+                    >
+                      {weeklyCompletedSessions.length >= weeklyTrainingGoal ? "✓" : ""}
+                    </span>
+
+                    <div className="flex-1">
+                      <p className="font-black">Treningi w tym tygodniu</p>
+                      <p className="text-sm text-slate-600">
+                        {weeklyCompletedSessions.length}/{weeklyTrainingGoal} ukończone
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 h-3 overflow-hidden rounded-full bg-white">
+                    <div
+                      className="h-full rounded-full bg-orange-600"
+                      style={{ width: `${weeklyProgress}%` }}
+                    />
+                  </div>
+                </div>
+
+                {weeklyGoals.length === 0 ? (
+                  <div className="rounded-xl border border-dashed p-4 text-sm text-slate-600">
+                    Brak własnych celów na ten tydzień. Kliknij „Edytuj cele”, żeby coś dodać.
+                  </div>
+                ) : (
+                  weeklyGoals.map((goal) => (
+                    <div
+                      key={goal.id}
+                      className={`flex items-center gap-3 rounded-xl border p-4 ${
+                        goal.completed
+                          ? "border-green-300 bg-green-50"
+                          : "border-slate-200 bg-white"
+                      }`}
+                    >
+                      <button
+                        onClick={() => toggleWeeklyGoal(goal)}
+                        className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-black ${
+                          goal.completed
+                            ? "bg-green-600 text-white"
+                            : "bg-slate-200 text-slate-600"
+                        }`}
+                      >
+                        {goal.completed ? "✓" : ""}
+                      </button>
+
+                      <p
+                        className={`flex-1 font-bold ${
+                          goal.completed ? "text-green-800 line-through" : "text-slate-800"
+                        }`}
+                      >
+                        {goal.title}
+                      </p>
+
+                      {editingGoals && (
+                        <button
+                          onClick={() => deleteWeeklyGoal(goal)}
+                          className="rounded bg-red-600 px-3 py-2 text-xs font-bold text-white hover:bg-red-500"
+                        >
+                          Usuń
+                        </button>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {editingGoals && (
+                <div className="mt-5 rounded-2xl border bg-slate-50 p-4">
+                  <h3 className="mb-3 font-black">Edytuj cele tygodnia</h3>
+
+                  <div className="rounded-xl bg-white p-4">
+                    <label className="mb-2 block text-sm font-bold text-slate-700">
+                      Cel treningowy
+                    </label>
+
+                    <div className="flex flex-col gap-2 md:flex-row md:items-center">
+                      <input
+                        type="number"
+                        min={1}
+                        max={14}
+                        value={weeklyTargetInput}
+                        onChange={(event) => setWeeklyTargetInput(event.target.value)}
+                        className="w-full rounded border p-3 md:w-28"
+                      />
+
+                      <span className="text-sm text-slate-600">
+                        treningi tygodniowo
+                      </span>
+
+                      <button
+                        onClick={saveWeeklyTrainingTarget}
+                        disabled={savingWeeklyGoal}
+                        className="rounded bg-orange-600 px-4 py-3 text-sm font-bold text-white hover:bg-orange-500 disabled:opacity-60"
+                      >
+                        Zapisz cel treningowy
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 rounded-xl bg-white p-4">
+                    <label className="mb-2 block text-sm font-bold text-slate-700">
+                      Dodaj własny cel
+                    </label>
+
+                    <div className="flex flex-col gap-2 md:flex-row">
+                      <input
+                        value={newWeeklyGoalTitle}
+                        onChange={(event) => setNewWeeklyGoalTitle(event.target.value)}
+                        placeholder="Np. zagrać sparing, 2x trening techniczny..."
+                        className="flex-1 rounded border p-3"
+                      />
+
+                      <button
+                        onClick={() => addWeeklyGoal()}
+                        disabled={savingWeeklyGoal}
+                        className="rounded bg-slate-800 px-5 py-3 font-bold text-white hover:bg-slate-700 disabled:opacity-60"
+                      >
+                        Dodaj
+                      </button>
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {quickGoalTemplates.map((template) => (
+                        <button
+                          key={template}
+                          onClick={() => addWeeklyGoal(template)}
+                          disabled={savingWeeklyGoal}
+                          className="rounded-full bg-orange-100 px-3 py-2 text-xs font-bold text-orange-800 hover:bg-orange-200 disabled:opacity-60"
+                        >
+                          + {template}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="rounded-2xl bg-white p-6 shadow">
@@ -1158,54 +1532,54 @@ export default function HomePage() {
                           </div>
                         )}
 
-{selectedDayData.activities.map((activity) => (
-  <div
-    key={activity.id}
-    className={`rounded px-3 py-2 text-sm ${
-      activity.type === "match"
-        ? "bg-blue-100 text-blue-800"
-        : activity.type === "tournament"
-          ? "bg-purple-100 text-purple-800"
-          : "bg-green-100 text-green-800"
-    }`}
-  >
-    <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-      <div>
-        <p className="font-bold">{activityLabels[activity.type]}</p>
-        {activity.notes && (
-          <p className="mt-1 whitespace-pre-wrap text-sm">{activity.notes}</p>
-        )}
-      </div>
+                        {selectedDayData.activities.map((activity) => (
+                          <div
+                            key={activity.id}
+                            className={`rounded px-3 py-2 text-sm ${
+                              activity.type === "match"
+                                ? "bg-blue-100 text-blue-800"
+                                : activity.type === "tournament"
+                                  ? "bg-purple-100 text-purple-800"
+                                  : "bg-green-100 text-green-800"
+                            }`}
+                          >
+                            <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                              <div>
+                                <p className="font-bold">{activityLabels[activity.type]}</p>
+                                {activity.notes && (
+                                  <p className="mt-1 whitespace-pre-wrap text-sm">{activity.notes}</p>
+                                )}
+                              </div>
 
-      <div className="flex gap-2">
-        <button
-          type="button"
-          onClick={() => startEditActivity(activity)}
-          className="rounded bg-white/70 px-3 py-1 text-xs font-bold hover:bg-white"
-        >
-          Edytuj
-        </button>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => startEditActivity(activity)}
+                                  className="rounded bg-white/70 px-3 py-1 text-xs font-bold hover:bg-white"
+                                >
+                                  Edytuj
+                                </button>
 
-        <button
-          type="button"
-          onClick={() => deleteActivity(activity)}
-          className="rounded bg-red-600 px-3 py-1 text-xs font-bold text-white hover:bg-red-500"
-        >
-          Usuń
-        </button>
-      </div>
-    </div>
-  </div>
-))}
+                                <button
+                                  type="button"
+                                  onClick={() => deleteActivity(activity)}
+                                  className="rounded bg-red-600 px-3 py-1 text-xs font-bold text-white hover:bg-red-500"
+                                >
+                                  Usuń
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>
                 )}
 
                 <div className="mt-5">
-                <label className="mb-2 block text-sm font-bold text-slate-700">
-  {editingActivityId ? "Edytuj aktywność" : "Dodaj aktywność"}
-</label>
+                  <label className="mb-2 block text-sm font-bold text-slate-700">
+                    {editingActivityId ? "Edytuj aktywność" : "Dodaj aktywność"}
+                  </label>
 
                   <select
                     value={activityType}
@@ -1235,10 +1609,10 @@ export default function HomePage() {
                     className="rounded bg-orange-600 px-5 py-3 font-bold text-white hover:bg-orange-500 disabled:opacity-60"
                   >
                     {savingActivity
-  ? "Zapisywanie..."
-  : editingActivityId
-    ? "Zapisz zmiany"
-    : "Zapisz"}
+                      ? "Zapisywanie..."
+                      : editingActivityId
+                        ? "Zapisz zmiany"
+                        : "Zapisz"}
                   </button>
 
                   <button
