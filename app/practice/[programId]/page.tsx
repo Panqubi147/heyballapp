@@ -96,6 +96,10 @@ export default function PracticePage({ params }: { params: { programId: string }
   const [savingAttempt, setSavingAttempt] = useState(false);
   const [finished, setFinished] = useState(false);
 
+  const [showFinishModal, setShowFinishModal] = useState(false);
+  const [finishComment, setFinishComment] = useState("");
+  const [finishingSession, setFinishingSession] = useState(false);
+
   const [resumeChoice, setResumeChoice] = useState<ResumeChoice>("checking");
   const [existingSession, setExistingSession] = useState<TrainingSessionDoc | null>(null);
 
@@ -104,8 +108,6 @@ export default function PracticePage({ params }: { params: { programId: string }
   const currentAttempts = currentExercise?.id
     ? attemptsByExercise[currentExercise.id] || []
     : [];
-
-  const currentMaxScore = currentExercise ? getExerciseMaxScore(currentExercise) : 1;
 
   const allResults = useMemo(() => {
     return exercises.map((exercise) =>
@@ -126,56 +128,68 @@ export default function PracticePage({ params }: { params: { programId: string }
 
   async function loadProgramAndExercises() {
     if (!user) return null;
-  
+
     const programSnapshot = await getDoc(doc(db, "trainingPrograms", params.programId));
-  
+
     if (!programSnapshot.exists()) {
       alert("Nie znaleziono treningu.");
       setLoading(false);
       return null;
     }
-  
+
     const loadedProgram = {
       id: programSnapshot.id,
       ...programSnapshot.data(),
     } as TrainingProgram;
-  
+
     if (loadedProgram.userId !== user.uid) {
       alert("Nie masz dostępu do tego treningu.");
       setLoading(false);
       return null;
     }
-  
-    const orderedExercises: Exercise[] = [];
-  
-    for (const exerciseId of loadedProgram.exerciseIds || []) {
-      const exerciseSnapshot = await getDoc(doc(db, "exercises", exerciseId));
-  
-      if (!exerciseSnapshot.exists()) {
-        console.warn("Nie znaleziono ćwiczenia:", exerciseId);
-        continue;
-      }
-  
-      const exercise = {
-        id: exerciseSnapshot.id,
-        ...exerciseSnapshot.data(),
-      } as Exercise;
-  
-      const canUseExercise =
-        exercise.userId === user.uid ||
-        exercise.isGlobal === true ||
-        Boolean(exercise.assignedByCoachId);
-  
-      if (canUseExercise) {
-        orderedExercises.push(exercise);
-      }
+
+    const ownExercisesSnapshot = await getDocs(
+      query(collection(db, "exercises"), where("userId", "==", user.uid))
+    );
+
+    let globalExercises: Exercise[] = [];
+
+    try {
+      const globalExercisesSnapshot = await getDocs(
+        query(collection(db, "exercises"), where("isGlobal", "==", true))
+      );
+
+      globalExercises = globalExercisesSnapshot.docs.map((document) => ({
+        id: document.id,
+        ...document.data(),
+      })) as Exercise[];
+    } catch (error) {
+      console.error("Nie udało się pobrać globalnych ćwiczeń:", error);
     }
-  
+
+    const ownExercises = ownExercisesSnapshot.docs.map((document) => ({
+      id: document.id,
+      ...document.data(),
+    })) as Exercise[];
+
+    const allExercises = [
+      ...ownExercises,
+      ...globalExercises.filter(
+        (globalExercise) =>
+          !ownExercises.some((ownExercise) => ownExercise.id === globalExercise.id)
+      ),
+    ];
+
+    const orderedExercises = loadedProgram.exerciseIds
+      .map((id) => allExercises.find((exercise) => exercise.id === id))
+      .filter(Boolean) as Exercise[];
+
     setProgram(loadedProgram);
     setExercises(orderedExercises);
-  
+
     return { loadedProgram, orderedExercises };
   }
+
   async function findExistingSession() {
     if (!user) return null;
 
@@ -343,12 +357,16 @@ export default function PracticePage({ params }: { params: { programId: string }
     }
   }
 
-  async function finishSession() {
+  function finishSession() {
     if (!sessionId || !user) return;
-  
-    const confirmed = confirm("Zakończyć i zapisać całą sesję?");
-    if (!confirmed) return;
-  
+    setShowFinishModal(true);
+  }
+
+  async function completeSession(saveComment: boolean) {
+    if (!sessionId || !user) return;
+
+    setFinishingSession(true);
+
     try {
       await updateDoc(doc(db, "trainingSessions", sessionId), {
         status: "completed",
@@ -357,15 +375,11 @@ export default function PracticePage({ params }: { params: { programId: string }
         results: allResults,
         sessionAveragePercentage,
       });
-  
-      const comment = prompt(
-        "Dodaj komentarz po treningu albo zostaw puste i kliknij OK, żeby pominąć."
-      );
-  
-      if (comment?.trim()) {
+
+      if (saveComment && finishComment.trim()) {
         await addDoc(collection(db, "reflections"), {
           userId: user.uid,
-          text: comment.trim(),
+          text: finishComment.trim(),
           type: "training",
           activityType: "training",
           activityDate: new Date().toISOString().slice(0, 10),
@@ -376,124 +390,189 @@ export default function PracticePage({ params }: { params: { programId: string }
           createdAt: serverTimestamp(),
         });
       }
-  
+
+      setShowFinishModal(false);
+      setFinishComment("");
       setFinished(true);
       alert("Sesja zapisana.");
     } catch (error) {
       console.error(error);
       alert("Błąd zapisu sesji.");
+    } finally {
+      setFinishingSession(false);
     }
   }
 
   return (
     <LoginRequired>
-      {loading || resumeChoice === "checking" ? (
-        <p>Ładowanie treningu...</p>
-      ) : !program || exercises.length === 0 ? (
-        <section className="rounded-2xl bg-white p-6 shadow">
-          <h1 className="text-2xl font-bold">Brak ćwiczeń w treningu</h1>
-          <Link href="/programs" className="mt-4 inline-block rounded bg-slate-800 px-4 py-2 text-white">
-            Wróć do treningów
-          </Link>
-        </section>
-      ) : resumeChoice === "choose" && existingSession ? (
-        <section className="mx-auto max-w-3xl space-y-6">
-          <div className="rounded-2xl bg-white p-8 text-center shadow">
-            <h1 className="text-3xl font-bold">Masz niedokończoną sesję</h1>
-            <p className="mt-3 text-slate-600">
-              Trening: <strong>{program.name}</strong>
-            </p>
-            <p className="mt-1 text-slate-600">
-              Zapisane podejścia:{" "}
-              <strong>
-                {(existingSession.results || []).reduce(
-                  (sum, result) => sum + (result.attempts?.length || 0),
-                  0
-                )}
-              </strong>
-            </p>
-            <p className="mt-1 text-slate-600">
-              Ostatnie ćwiczenie:{" "}
-              <strong>
-                {(existingSession.currentExerciseIndex || 0) + 1} / {exercises.length}
-              </strong>
-            </p>
-
-            <div className="mt-8 grid gap-3 md:grid-cols-2">
-              <button
-                onClick={() => continueExistingSession(existingSession)}
-                className="rounded bg-orange-600 px-6 py-4 font-black text-white hover:bg-orange-500"
-              >
-                Kontynuuj sesję
-              </button>
-
-              <button
-                onClick={discardAndStartNewSession}
-                className="rounded bg-slate-800 px-6 py-4 font-black text-white hover:bg-slate-700"
-              >
-                Zacznij nową
-              </button>
-            </div>
-
-            <Link href="/programs" className="mt-5 inline-block text-sm font-bold text-slate-600 underline">
+      <>
+        {loading || resumeChoice === "checking" ? (
+          <p>Ładowanie treningu...</p>
+        ) : !program || exercises.length === 0 ? (
+          <section className="rounded-2xl bg-white p-6 shadow">
+            <h1 className="text-2xl font-bold">Brak ćwiczeń w treningu</h1>
+            <Link
+              href="/programs"
+              className="mt-4 inline-block rounded bg-slate-800 px-4 py-2 text-white"
+            >
               Wróć do treningów
             </Link>
-          </div>
-        </section>
-      ) : finished ? (
-        <section className="space-y-6">
-          <div className="rounded-2xl bg-white p-6 text-center shadow">
-            <h1 className="text-3xl font-bold">Sesja zakończona ✅</h1>
-            <p className="mt-2 text-slate-600">
-              Średnia skuteczność sesji: {sessionAveragePercentage.toFixed(1)}%
-            </p>
+          </section>
+        ) : resumeChoice === "choose" && existingSession ? (
+          <section className="mx-auto max-w-3xl space-y-6">
+            <div className="rounded-2xl bg-white p-8 text-center shadow">
+              <h1 className="text-3xl font-bold">Masz niedokończoną sesję</h1>
+              <p className="mt-3 text-slate-600">
+                Trening: <strong>{program.name}</strong>
+              </p>
+              <p className="mt-1 text-slate-600">
+                Zapisane podejścia:{" "}
+                <strong>
+                  {(existingSession.results || []).reduce(
+                    (sum, result) => sum + (result.attempts?.length || 0),
+                    0
+                  )}
+                </strong>
+              </p>
+              <p className="mt-1 text-slate-600">
+                Ostatnie ćwiczenie:{" "}
+                <strong>
+                  {(existingSession.currentExerciseIndex || 0) + 1} / {exercises.length}
+                </strong>
+              </p>
 
-            <div className="mt-6 flex justify-center gap-3">
-              <Link href="/stats" className="rounded bg-orange-600 px-5 py-3 font-bold text-white">
-                Zobacz statystyki
-              </Link>
-              <Link href="/programs" className="rounded bg-slate-800 px-5 py-3 font-bold text-white">
+              <div className="mt-8 grid gap-3 md:grid-cols-2">
+                <button
+                  onClick={() => continueExistingSession(existingSession)}
+                  className="rounded bg-orange-600 px-6 py-4 font-black text-white hover:bg-orange-500"
+                >
+                  Kontynuuj sesję
+                </button>
+
+                <button
+                  onClick={discardAndStartNewSession}
+                  className="rounded bg-slate-800 px-6 py-4 font-black text-white hover:bg-slate-700"
+                >
+                  Zacznij nową
+                </button>
+              </div>
+
+              <Link
+                href="/programs"
+                className="mt-5 inline-block text-sm font-bold text-slate-600 underline"
+              >
                 Wróć do treningów
               </Link>
             </div>
-          </div>
+          </section>
+        ) : finished ? (
+          <section className="space-y-6">
+            <div className="rounded-2xl bg-white p-6 text-center shadow">
+              <h1 className="text-3xl font-bold">Sesja zakończona ✅</h1>
+              <p className="mt-2 text-slate-600">
+                Średnia skuteczność sesji: {sessionAveragePercentage.toFixed(1)}%
+              </p>
 
-          <div className="rounded-2xl bg-white p-6 shadow">
-            <h2 className="mb-4 text-xl font-bold">Podsumowanie</h2>
+              <div className="mt-6 flex justify-center gap-3">
+                <Link href="/stats" className="rounded bg-orange-600 px-5 py-3 font-bold text-white">
+                  Zobacz statystyki
+                </Link>
+                <Link href="/programs" className="rounded bg-slate-800 px-5 py-3 font-bold text-white">
+                  Wróć do treningów
+                </Link>
+              </div>
+            </div>
 
-            <div className="space-y-3">
-              {allResults.map((result, index) => {
-                const exercise = exercises.find((item) => item.id === result.exerciseId);
+            <div className="rounded-2xl bg-white p-6 shadow">
+              <h2 className="mb-4 text-xl font-bold">Podsumowanie</h2>
 
-                return (
-                  <div key={result.exerciseId} className="rounded border p-4">
-                    <p className="font-bold">
-                      {index + 1}. {exercise?.name || "Ćwiczenie"}
-                    </p>
-                    <p className="text-sm text-slate-600">
-                      Próby: {result.attempts.join(", ") || "-"} · Średnia:{" "}
-                      {result.average.toFixed(1)} / {result.maxScore} · Best:{" "}
-                      {result.best} · Skuteczność: {result.percentage.toFixed(1)}%
-                    </p>
-                  </div>
-                );
-              })}
+              <div className="space-y-3">
+                {allResults.map((result, index) => {
+                  const exercise = exercises.find((item) => item.id === result.exerciseId);
+
+                  return (
+                    <div key={result.exerciseId} className="rounded border p-4">
+                      <p className="font-bold">
+                        {index + 1}. {exercise?.name || "Ćwiczenie"}
+                      </p>
+                      <p className="text-sm text-slate-600">
+                        Próby: {result.attempts.join(", ") || "-"} · Średnia:{" "}
+                        {result.average.toFixed(1)} / {result.maxScore} · Best:{" "}
+                        {result.best} · Skuteczność: {result.percentage.toFixed(1)}%
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </section>
+        ) : (
+          <PracticeContent
+            program={program}
+            exercises={exercises}
+            currentIndex={currentIndex}
+            attemptsByExercise={attemptsByExercise}
+            savingAttempt={savingAttempt}
+            addAttempt={addAttempt}
+            removeLastAttempt={removeLastAttempt}
+            goToExercise={goToExercise}
+            finishSession={finishSession}
+          />
+        )}
+
+        {showFinishModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+            <div className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl">
+              <h2 className="text-2xl font-black">Zakończyć trening?</h2>
+
+              <p className="mt-2 text-slate-600">
+                Sesja zostanie zapisana w statystykach. Możesz też dodać krótki komentarz,
+                który trafi do sekcji <strong>Przemyślenia</strong>.
+              </p>
+
+              <div className="mt-5 rounded-xl bg-slate-50 p-4">
+                <p className="text-sm text-slate-500">Średnia skuteczność sesji</p>
+                <p className="text-3xl font-black text-orange-700">
+                  {sessionAveragePercentage.toFixed(1)}%
+                </p>
+              </div>
+
+              <textarea
+                value={finishComment}
+                onChange={(event) => setFinishComment(event.target.value)}
+                placeholder="Np. Dobrze działało pozycjonowanie, ale za szybko podchodziłam do trudnych bil..."
+                className="mt-5 min-h-[130px] w-full rounded border p-3"
+              />
+
+              <div className="mt-5 flex flex-wrap gap-3">
+                <button
+                  onClick={() => completeSession(true)}
+                  disabled={finishingSession}
+                  className="rounded bg-orange-600 px-5 py-3 font-bold text-white hover:bg-orange-500 disabled:opacity-60"
+                >
+                  {finishingSession ? "Zapisywanie..." : "Zapisz z komentarzem"}
+                </button>
+
+                <button
+                  onClick={() => completeSession(false)}
+                  disabled={finishingSession}
+                  className="rounded bg-slate-800 px-5 py-3 font-bold text-white hover:bg-slate-700 disabled:opacity-60"
+                >
+                  Zakończ bez komentarza
+                </button>
+
+                <button
+                  onClick={() => setShowFinishModal(false)}
+                  disabled={finishingSession}
+                  className="rounded bg-slate-200 px-5 py-3 font-bold text-slate-800 hover:bg-slate-300 disabled:opacity-60"
+                >
+                  Anuluj
+                </button>
+              </div>
             </div>
           </div>
-        </section>
-      ) : (
-        <PracticeContent
-          program={program}
-          exercises={exercises}
-          currentIndex={currentIndex}
-          attemptsByExercise={attemptsByExercise}
-          savingAttempt={savingAttempt}
-          addAttempt={addAttempt}
-          removeLastAttempt={removeLastAttempt}
-          goToExercise={goToExercise}
-          finishSession={finishSession}
-        />
-      )}
+        )}
+      </>
     </LoginRequired>
   );
 }
@@ -536,11 +615,13 @@ function PracticeContent({
         <p className="mt-1 text-slate-600">
           Ćwiczenie {currentIndex + 1} / {exercises.length}: {currentExercise.name}
         </p>
+
         {currentExercise.description && (
-  <p className="mx-auto mt-3 max-w-3xl rounded-xl bg-slate-100 p-4 text-left text-sm text-slate-700">
-    {currentExercise.description}
-  </p>
-)}
+          <p className="mx-auto mt-3 max-w-3xl rounded-xl bg-slate-100 p-4 text-left text-sm text-slate-700">
+            {currentExercise.description}
+          </p>
+        )}
+
         <p className="mt-1 text-sm text-slate-500">
           Każde kliknięte podejście zapisuje się automatycznie.
         </p>
