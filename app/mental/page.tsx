@@ -57,6 +57,7 @@ type MentalProfile = {
 };
 
 type StroopColor = "red" | "blue" | "green" | "purple";
+type MentalTab = "dashboard" | "games" | "routine" | "wheel" | "history";
 
 type StroopRound = {
   word: StroopColor;
@@ -160,6 +161,8 @@ function getRandomStroopRound(): StroopRound {
 export default function MentalPage() {
   const { user } = useAuth();
 
+  const [activeTab, setActiveTab] = useState<MentalTab>("dashboard");
+
   const [results, setResults] = useState<HundredGameResult[]>([]);
   const [focusResults, setFocusResults] = useState<FocusResult[]>([]);
   const [stroopResults, setStroopResults] = useState<StroopResult[]>([]);
@@ -249,7 +252,10 @@ export default function MentalPage() {
     loadedResults.sort((a, b) => (a.timeMs || 0) - (b.timeMs || 0));
     loadedFocusResults.sort((a, b) => (a.averageMs || 0) - (b.averageMs || 0));
     loadedStroopResults.sort((a, b) => {
-      if ((b.accuracy || 0) !== (a.accuracy || 0)) return (b.accuracy || 0) - (a.accuracy || 0);
+      if ((b.accuracy || 0) !== (a.accuracy || 0)) {
+        return (b.accuracy || 0) - (a.accuracy || 0);
+      }
+
       return (a.averageMs || 0) - (b.averageMs || 0);
     });
     loadedProfiles.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
@@ -314,6 +320,7 @@ export default function MentalPage() {
   const bestResult = results[0];
   const bestFocusResult = focusResults[0];
   const bestStroopResult = stroopResults[0];
+  const latestProfile = profiles[0];
 
   const lastTenAverage = useMemo(() => {
     const lastTen = [...results]
@@ -339,14 +346,13 @@ export default function MentalPage() {
     return Math.round((checkedItems.length / checklistItems.length) * 100);
   }, [checkedItems]);
 
-  const latestProfile = profiles[0];
-
   function startGame() {
     setNumbers(shuffleNumbers());
     setNextNumber(1);
     setCurrentTime(0);
     setStartedAt(Date.now());
     setGameRunning(true);
+    setActiveTab("games");
   }
 
   async function clickNumber(number: number) {
@@ -387,6 +393,7 @@ export default function MentalPage() {
     setFocusTimes([]);
     setFocusTarget(getRandomTargetPosition());
     setFocusTargetStartedAt(Date.now());
+    setActiveTab("games");
   }
 
   async function clickFocusTarget() {
@@ -436,6 +443,7 @@ export default function MentalPage() {
     setStroopCorrect(0);
     setStroopTimes([]);
     setCurrentStroopRound(getRandomStroopRound());
+    setActiveTab("games");
   }
 
   async function answerStroop(answer: StroopColor) {
@@ -466,7 +474,9 @@ export default function MentalPage() {
         });
 
         await loadMentalData();
-        alert(`Stroop Test zakończony! Poprawność: ${accuracy.toFixed(0)}%, średni czas: ${formatMs(averageMs)}`);
+        alert(
+          `Stroop Test zakończony! Poprawność: ${accuracy.toFixed(0)}%, średni czas: ${formatMs(averageMs)}`
+        );
       } catch (error) {
         console.error(error);
         alert("Błąd zapisu Stroop Test.");
@@ -487,6 +497,7 @@ export default function MentalPage() {
     setBreathingStep(0);
     setBreathingSeconds(breathingSteps[0].seconds);
     setBreathingRunning(true);
+    setActiveTab("routine");
   }
 
   function stopBreathing() {
@@ -548,512 +559,584 @@ export default function MentalPage() {
             </p>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-5">
-            <div className="rounded-2xl bg-white p-5 shadow">
-              <p className="text-sm text-slate-500">Setka Game — best</p>
-              <p className="text-3xl font-black">
-                {bestResult ? formatTime(bestResult.timeMs) : "-"}
-              </p>
-            </div>
-
-            <div className="rounded-2xl bg-white p-5 shadow">
-              <p className="text-sm text-slate-500">Focus — best avg</p>
-              <p className="text-3xl font-black">
-                {bestFocusResult ? formatMs(bestFocusResult.averageMs) : "-"}
-              </p>
-            </div>
-
-            <div className="rounded-2xl bg-white p-5 shadow">
-              <p className="text-sm text-slate-500">Stroop — best</p>
-              <p className="text-3xl font-black">
-                {bestStroopResult
-                  ? `${bestStroopResult.accuracy.toFixed(0)}%`
-                  : "-"}
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                {bestStroopResult ? formatMs(bestStroopResult.averageMs) : ""}
-              </p>
-            </div>
-
-            <div className="rounded-2xl bg-white p-5 shadow">
-              <p className="text-sm text-slate-500">Setka — średnia 10</p>
-              <p className="text-3xl font-black">
-                {lastTenAverage ? formatTime(lastTenAverage) : "-"}
-              </p>
-            </div>
-
-            <div className="rounded-2xl bg-white p-5 shadow">
-              <p className="text-sm text-slate-500">Focus — średnia 10</p>
-              <p className="text-3xl font-black">
-                {focusLastTenAverage ? formatMs(focusLastTenAverage) : "-"}
-              </p>
-            </div>
+          <div className="grid gap-3 md:grid-cols-5">
+            <MentalTabButton active={activeTab === "dashboard"} onClick={() => setActiveTab("dashboard")} title="Dashboard" subtitle="Podsumowanie" />
+            <MentalTabButton active={activeTab === "games"} onClick={() => setActiveTab("games")} title="Gry" subtitle="Setka, Focus, Stroop" />
+            <MentalTabButton active={activeTab === "routine"} onClick={() => setActiveTab("routine")} title="Rutyna" subtitle="Oddech i checklista" />
+            <MentalTabButton active={activeTab === "wheel"} onClick={() => setActiveTab("wheel")} title="Koło" subtitle="Samoocena" />
+            <MentalTabButton active={activeTab === "history"} onClick={() => setActiveTab("history")} title="Historia" subtitle="Wyniki testów" />
           </div>
 
-          {/* Setka Game */}
-          <div className="rounded-2xl bg-white p-6 shadow">
-            <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <h2 className="text-2xl font-black">Setka Game</h2>
-                <p className="text-slate-600">
-                  Klikaj liczby od 1 do 100 w kolejności. Liczy się czas.
-                </p>
+          {activeTab === "dashboard" && (
+            <>
+              <div className="grid gap-4 md:grid-cols-5">
+                <StatCard label="Setka Game — best" value={bestResult ? formatTime(bestResult.timeMs) : "-"} />
+                <StatCard label="Focus — best avg" value={bestFocusResult ? formatMs(bestFocusResult.averageMs) : "-"} />
+                <StatCard
+                  label="Stroop — best"
+                  value={bestStroopResult ? `${bestStroopResult.accuracy.toFixed(0)}%` : "-"}
+                  subValue={bestStroopResult ? formatMs(bestStroopResult.averageMs) : ""}
+                />
+                <StatCard label="Setka — średnia 10" value={lastTenAverage ? formatTime(lastTenAverage) : "-"} />
+                <StatCard label="Focus — średnia 10" value={focusLastTenAverage ? formatMs(focusLastTenAverage) : "-"} />
               </div>
 
-              <div className="text-right">
-                <p className="text-sm text-slate-500">Następna liczba</p>
-                <p className="text-3xl font-black text-orange-700">{nextNumber}</p>
-              </div>
-            </div>
+              <div className="grid gap-6 lg:grid-cols-3">
+                <DashboardShortcut
+                  title="Gry mentalne"
+                  description="Trenuj koncentrację, refleks i kontrolę impulsu."
+                  button="Przejdź do gier"
+                  onClick={() => setActiveTab("games")}
+                />
 
-            <div className="mb-5 flex flex-wrap items-center gap-3">
-              <button
-                onClick={startGame}
-                disabled={savingResult}
-                className="rounded bg-orange-600 px-6 py-3 font-bold text-white hover:bg-orange-500 disabled:opacity-60"
-              >
-                {gameRunning ? "Restart" : "Start"}
-              </button>
+                <DashboardShortcut
+                  title="Rutyna przed grą"
+                  description="Oddech, reset i checklista gotowości przed meczem."
+                  button="Przejdź do rutyny"
+                  onClick={() => setActiveTab("routine")}
+                />
 
-              <span className="rounded bg-slate-100 px-4 py-3 font-black">
-                Czas: {formatTime(currentTime)}
-              </span>
-
-              {savingResult && (
-                <span className="rounded bg-orange-100 px-4 py-3 text-sm font-bold text-orange-700">
-                  Zapisywanie...
-                </span>
-              )}
-            </div>
-
-            {numbers.length === 0 ? (
-              <div className="rounded-xl bg-slate-50 p-8 text-center text-slate-600">
-                Kliknij Start, żeby rozpocząć grę.
-              </div>
-            ) : (
-              <div className="mx-auto grid max-w-[620px] grid-cols-10 gap-1">
-                {numbers.map((number) => {
-                  const alreadyClicked = number < nextNumber;
-
-                  return (
-                    <button
-                      key={number}
-                      onClick={() => clickNumber(number)}
-                      disabled={alreadyClicked}
-                      className={`aspect-square rounded border text-[11px] font-black leading-none transition sm:text-xs ${
-                        alreadyClicked
-                          ? "bg-slate-200 text-slate-300"
-                          : "bg-white text-slate-900 hover:bg-slate-100"
-                      }`}
-                    >
-                      {number}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Focus Test */}
-          <div className="rounded-2xl bg-white p-6 shadow">
-            <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <h2 className="text-2xl font-black">Focus Test</h2>
-                <p className="text-slate-600">
-                  Kliknij target jak najszybciej. Test ma {FOCUS_ROUNDS} rund i zapisuje średni czas reakcji.
-                </p>
-              </div>
-
-              <div className="text-right">
-                <p className="text-sm text-slate-500">Runda</p>
-                <p className="text-3xl font-black text-blue-700">
-                  {focusRunning ? `${focusRound}/${FOCUS_ROUNDS}` : `0/${FOCUS_ROUNDS}`}
-                </p>
-              </div>
-            </div>
-
-            <div className="mb-5 flex flex-wrap items-center gap-3">
-              <button
-                onClick={startFocusTest}
-                disabled={savingFocusResult}
-                className="rounded bg-blue-600 px-6 py-3 font-bold text-white hover:bg-blue-500 disabled:opacity-60"
-              >
-                {focusRunning ? "Restart" : "Start Focus Test"}
-              </button>
-
-              {focusTimes.length > 0 && (
-                <span className="rounded bg-slate-100 px-4 py-3 font-black">
-                  Ostatni klik: {formatMs(focusTimes[focusTimes.length - 1])}
-                </span>
-              )}
-
-              {savingFocusResult && (
-                <span className="rounded bg-blue-100 px-4 py-3 text-sm font-bold text-blue-700">
-                  Zapisywanie...
-                </span>
-              )}
-            </div>
-
-            <div className="relative h-[420px] overflow-hidden rounded-2xl border bg-slate-50">
-              {!focusRunning ? (
-                <div className="flex h-full items-center justify-center text-center text-slate-600">
-                  Kliknij Start Focus Test, żeby rozpocząć.
-                </div>
-              ) : (
-                <button
-                  onClick={clickFocusTarget}
-                  className="absolute h-12 w-12 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-600 font-black text-white shadow-lg transition hover:bg-blue-500"
-                  style={{
-                    left: `${focusTarget.x}%`,
-                    top: `${focusTarget.y}%`,
-                  }}
-                >
-                  🎯
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Stroop Test */}
-          <div className="rounded-2xl bg-white p-6 shadow">
-            <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <h2 className="text-2xl font-black">Stroop Test</h2>
-                <p className="text-slate-600">
-                  Kliknij kolor czcionki, nie znaczenie słowa. Test sprawdza kontrolę impulsu.
-                </p>
-              </div>
-
-              <div className="text-right">
-                <p className="text-sm text-slate-500">Runda</p>
-                <p className="text-3xl font-black text-purple-700">
-                  {stroopRunning ? `${stroopRoundIndex}/${STROOP_ROUNDS}` : `0/${STROOP_ROUNDS}`}
-                </p>
-              </div>
-            </div>
-
-            <div className="mb-5 flex flex-wrap items-center gap-3">
-              <button
-                onClick={startStroopTest}
-                disabled={savingStroopResult}
-                className="rounded bg-purple-600 px-6 py-3 font-bold text-white hover:bg-purple-500 disabled:opacity-60"
-              >
-                {stroopRunning ? "Restart" : "Start Stroop Test"}
-              </button>
-
-              {stroopRunning && (
-                <span className="rounded bg-slate-100 px-4 py-3 font-black">
-                  Poprawne: {stroopCorrect}/{stroopRoundIndex - 1}
-                </span>
-              )}
-
-              {savingStroopResult && (
-                <span className="rounded bg-purple-100 px-4 py-3 text-sm font-bold text-purple-700">
-                  Zapisywanie...
-                </span>
-              )}
-            </div>
-
-            <div className="rounded-2xl border bg-slate-50 p-8 text-center">
-              {!stroopRunning || !currentStroopRound ? (
-                <div className="py-12 text-slate-600">
-                  Kliknij Start Stroop Test, żeby rozpocząć.
-                </div>
-              ) : (
-                <>
-                  <p className={`text-6xl font-black ${stroopTextClasses[currentStroopRound.color]}`}>
-                    {stroopLabels[currentStroopRound.word]}
-                  </p>
-
-                  <p className="mt-4 text-sm text-slate-500">
-                    Kliknij kolor liter, nie słowo.
-                  </p>
-
-                  <div className="mt-8 grid gap-3 sm:grid-cols-4">
-                    {(["red", "blue", "green", "purple"] as StroopColor[]).map((color) => (
-                      <button
-                        key={color}
-                        onClick={() => answerStroop(color)}
-                        className={`rounded px-4 py-4 font-black text-white ${stroopButtonClasses[color]}`}
-                      >
-                        {stroopLabels[color]}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* Breathing + Checklist */}
-          <div className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
-            <div className="rounded-2xl bg-white p-6 shadow">
-              <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <h2 className="text-2xl font-black">Breathing Trainer</h2>
-                  <p className="text-slate-600">
-                    Prosta rutyna oddechowa przed treningiem, sparingiem albo turniejem.
-                  </p>
-                </div>
-
-                <div className="text-right">
-                  <p className="text-sm text-slate-500">Tryb</p>
-                  <p className="text-2xl font-black text-green-700">Box Breathing</p>
-                </div>
-              </div>
-
-              <div className="rounded-2xl bg-slate-50 p-8 text-center">
-                <div className="mx-auto flex h-44 w-44 items-center justify-center rounded-full bg-green-100 shadow-inner">
-                  <div>
-                    <p className="text-3xl font-black text-green-800">
-                      {breathingRunning ? breathingSteps[breathingStep].label : "Gotowa?"}
-                    </p>
-
-                    <p className="mt-2 text-5xl font-black text-green-700">
-                      {breathingRunning ? breathingSeconds : "4"}
-                    </p>
-                  </div>
-                </div>
-
-                <p className="mx-auto mt-6 max-w-xl text-slate-600">
-                  Schemat: wdech 4 sekundy → zatrzymaj 4 sekundy → wydech 4 sekundy →
-                  zatrzymaj 4 sekundy. Powtórz kilka cykli przed ważną partią.
-                </p>
-
-                <div className="mt-6 flex justify-center gap-3">
-                  <button
-                    onClick={startBreathing}
-                    className="rounded bg-green-700 px-6 py-3 font-bold text-white hover:bg-green-600"
-                  >
-                    Start
-                  </button>
-
-                  <button
-                    onClick={stopBreathing}
-                    className="rounded bg-slate-200 px-6 py-3 font-bold text-slate-800 hover:bg-slate-300"
-                  >
-                    Stop
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-2xl bg-white p-6 shadow">
-              <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <h2 className="text-2xl font-black">Pre-match Checklist</h2>
-                  <p className="text-slate-600">
-                    Szybka kontrola gotowości przed sparingiem, turniejem albo ważnym treningiem.
-                  </p>
-                </div>
-
-                <div className="rounded-xl bg-slate-100 px-4 py-3 text-right">
-                  <p className="text-sm text-slate-500">Gotowość</p>
-                  <p className="text-3xl font-black text-orange-700">{checklistProgress}%</p>
-                </div>
-              </div>
-
-              <div className="mb-5 h-4 overflow-hidden rounded-full bg-slate-100">
-                <div
-                  className="h-full rounded-full bg-orange-600"
-                  style={{ width: `${checklistProgress}%` }}
+                <DashboardShortcut
+                  title="Koło zawodnika"
+                  description={
+                    latestProfile
+                      ? `Ostatnia samoocena: ${formatDate(latestProfile.createdAt)}`
+                      : "Zrób pierwszą samoocenę umiejętności."
+                  }
+                  button="Przejdź do koła"
+                  onClick={() => setActiveTab("wheel")}
                 />
               </div>
+            </>
+          )}
 
-              <div className="space-y-3">
-                {checklistItems.map((item) => {
-                  const checked = checkedItems.includes(item);
+          {activeTab === "games" && (
+            <>
+              <div className="rounded-2xl bg-white p-6 shadow">
+                <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <h2 className="text-2xl font-black">Setka Game</h2>
+                    <p className="text-slate-600">
+                      Klikaj liczby od 1 do 100 w kolejności. Liczy się czas.
+                    </p>
+                  </div>
 
-                  return (
-                    <button
-                      key={item}
-                      onClick={() => toggleChecklistItem(item)}
-                      className={`flex w-full items-center gap-3 rounded-xl border p-4 text-left transition ${
-                        checked
-                          ? "border-green-300 bg-green-50"
-                          : "border-slate-200 bg-white hover:bg-slate-50"
-                      }`}
-                    >
-                      <span
-                        className={`flex h-7 w-7 items-center justify-center rounded-full text-sm font-black ${
-                          checked
-                            ? "bg-green-600 text-white"
-                            : "bg-slate-200 text-slate-600"
-                        }`}
-                      >
-                        {checked ? "✓" : ""}
-                      </span>
+                  <div className="text-right">
+                    <p className="text-sm text-slate-500">Następna liczba</p>
+                    <p className="text-3xl font-black text-orange-700">{nextNumber}</p>
+                  </div>
+                </div>
 
-                      <span className="font-bold text-slate-800">{item}</span>
-                    </button>
-                  );
-                })}
+                <div className="mb-5 flex flex-wrap items-center gap-3">
+                  <button
+                    onClick={startGame}
+                    disabled={savingResult}
+                    className="rounded bg-orange-600 px-6 py-3 font-bold text-white hover:bg-orange-500 disabled:opacity-60"
+                  >
+                    {gameRunning ? "Restart" : "Start"}
+                  </button>
+
+                  <span className="rounded bg-slate-100 px-4 py-3 font-black">
+                    Czas: {formatTime(currentTime)}
+                  </span>
+
+                  {savingResult && (
+                    <span className="rounded bg-orange-100 px-4 py-3 text-sm font-bold text-orange-700">
+                      Zapisywanie...
+                    </span>
+                  )}
+                </div>
+
+                {numbers.length === 0 ? (
+                  <div className="rounded-xl bg-slate-50 p-8 text-center text-slate-600">
+                    Kliknij Start, żeby rozpocząć grę.
+                  </div>
+                ) : (
+                  <div className="mx-auto grid max-w-[620px] grid-cols-10 gap-1">
+                    {numbers.map((number) => {
+                      const alreadyClicked = number < nextNumber;
+
+                      return (
+                        <button
+                          key={number}
+                          onClick={() => clickNumber(number)}
+                          disabled={alreadyClicked}
+                          className={`aspect-square rounded border text-[11px] font-black leading-none transition sm:text-xs ${
+                            alreadyClicked
+                              ? "bg-slate-200 text-slate-300"
+                              : "bg-white text-slate-900 hover:bg-slate-100"
+                          }`}
+                        >
+                          {number}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
-              <div className="mt-5 flex flex-wrap gap-3">
-                <button
-                  onClick={resetChecklist}
-                  className="rounded bg-slate-200 px-5 py-3 font-bold text-slate-800 hover:bg-slate-300"
-                >
-                  Reset
-                </button>
+              <div className="rounded-2xl bg-white p-6 shadow">
+                <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <h2 className="text-2xl font-black">Focus Test</h2>
+                    <p className="text-slate-600">
+                      Kliknij target jak najszybciej. Test ma {FOCUS_ROUNDS} rund.
+                    </p>
+                  </div>
 
-                {checklistProgress === 100 && (
-                  <span className="rounded bg-green-100 px-5 py-3 font-bold text-green-700">
-                    Gotowa do gry ✅
-                  </span>
+                  <div className="text-right">
+                    <p className="text-sm text-slate-500">Runda</p>
+                    <p className="text-3xl font-black text-blue-700">
+                      {focusRunning ? `${focusRound}/${FOCUS_ROUNDS}` : `0/${FOCUS_ROUNDS}`}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mb-5 flex flex-wrap items-center gap-3">
+                  <button
+                    onClick={startFocusTest}
+                    disabled={savingFocusResult}
+                    className="rounded bg-blue-600 px-6 py-3 font-bold text-white hover:bg-blue-500 disabled:opacity-60"
+                  >
+                    {focusRunning ? "Restart" : "Start Focus Test"}
+                  </button>
+
+                  {focusTimes.length > 0 && (
+                    <span className="rounded bg-slate-100 px-4 py-3 font-black">
+                      Ostatni klik: {formatMs(focusTimes[focusTimes.length - 1])}
+                    </span>
+                  )}
+
+                  {savingFocusResult && (
+                    <span className="rounded bg-blue-100 px-4 py-3 text-sm font-bold text-blue-700">
+                      Zapisywanie...
+                    </span>
+                  )}
+                </div>
+
+                <div className="relative h-[420px] overflow-hidden rounded-2xl border bg-slate-50">
+                  {!focusRunning ? (
+                    <div className="flex h-full items-center justify-center text-center text-slate-600">
+                      Kliknij Start Focus Test, żeby rozpocząć.
+                    </div>
+                  ) : (
+                    <button
+                      onClick={clickFocusTarget}
+                      className="absolute h-12 w-12 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-600 font-black text-white shadow-lg transition hover:bg-blue-500"
+                      style={{
+                        left: `${focusTarget.x}%`,
+                        top: `${focusTarget.y}%`,
+                      }}
+                    >
+                      🎯
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-2xl bg-white p-6 shadow">
+                <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <h2 className="text-2xl font-black">Stroop Test</h2>
+                    <p className="text-slate-600">
+                      Kliknij kolor czcionki, nie znaczenie słowa.
+                    </p>
+                  </div>
+
+                  <div className="text-right">
+                    <p className="text-sm text-slate-500">Runda</p>
+                    <p className="text-3xl font-black text-purple-700">
+                      {stroopRunning ? `${stroopRoundIndex}/${STROOP_ROUNDS}` : `0/${STROOP_ROUNDS}`}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mb-5 flex flex-wrap items-center gap-3">
+                  <button
+                    onClick={startStroopTest}
+                    disabled={savingStroopResult}
+                    className="rounded bg-purple-600 px-6 py-3 font-bold text-white hover:bg-purple-500 disabled:opacity-60"
+                  >
+                    {stroopRunning ? "Restart" : "Start Stroop Test"}
+                  </button>
+
+                  {stroopRunning && (
+                    <span className="rounded bg-slate-100 px-4 py-3 font-black">
+                      Poprawne: {stroopCorrect}/{stroopRoundIndex - 1}
+                    </span>
+                  )}
+
+                  {savingStroopResult && (
+                    <span className="rounded bg-purple-100 px-4 py-3 text-sm font-bold text-purple-700">
+                      Zapisywanie...
+                    </span>
+                  )}
+                </div>
+
+                <div className="rounded-2xl border bg-slate-50 p-8 text-center">
+                  {!stroopRunning || !currentStroopRound ? (
+                    <div className="py-12 text-slate-600">
+                      Kliknij Start Stroop Test, żeby rozpocząć.
+                    </div>
+                  ) : (
+                    <>
+                      <p className={`text-6xl font-black ${stroopTextClasses[currentStroopRound.color]}`}>
+                        {stroopLabels[currentStroopRound.word]}
+                      </p>
+
+                      <p className="mt-4 text-sm text-slate-500">
+                        Kliknij kolor liter, nie słowo.
+                      </p>
+
+                      <div className="mt-8 grid gap-3 sm:grid-cols-4">
+                        {(["red", "blue", "green", "purple"] as StroopColor[]).map((color) => (
+                          <button
+                            key={color}
+                            onClick={() => answerStroop(color)}
+                            className={`rounded px-4 py-4 font-black text-white ${stroopButtonClasses[color]}`}
+                          >
+                            {stroopLabels[color]}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+
+          {activeTab === "routine" && (
+            <div className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
+              <div className="rounded-2xl bg-white p-6 shadow">
+                <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <h2 className="text-2xl font-black">Breathing Trainer</h2>
+                    <p className="text-slate-600">
+                      Prosta rutyna oddechowa przed treningiem, sparingiem albo turniejem.
+                    </p>
+                  </div>
+
+                  <div className="text-right">
+                    <p className="text-sm text-slate-500">Tryb</p>
+                    <p className="text-2xl font-black text-green-700">Box Breathing</p>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl bg-slate-50 p-8 text-center">
+                  <div className="mx-auto flex h-44 w-44 items-center justify-center rounded-full bg-green-100 shadow-inner">
+                    <div>
+                      <p className="text-3xl font-black text-green-800">
+                        {breathingRunning ? breathingSteps[breathingStep].label : "Gotowa?"}
+                      </p>
+
+                      <p className="mt-2 text-5xl font-black text-green-700">
+                        {breathingRunning ? breathingSeconds : "4"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <p className="mx-auto mt-6 max-w-xl text-slate-600">
+                    Wdech 4 sekundy → zatrzymaj 4 sekundy → wydech 4 sekundy →
+                    zatrzymaj 4 sekundy.
+                  </p>
+
+                  <div className="mt-6 flex justify-center gap-3">
+                    <button
+                      onClick={startBreathing}
+                      className="rounded bg-green-700 px-6 py-3 font-bold text-white hover:bg-green-600"
+                    >
+                      Start
+                    </button>
+
+                    <button
+                      onClick={stopBreathing}
+                      className="rounded bg-slate-200 px-6 py-3 font-bold text-slate-800 hover:bg-slate-300"
+                    >
+                      Stop
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-2xl bg-white p-6 shadow">
+                <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <h2 className="text-2xl font-black">Pre-match Checklist</h2>
+                    <p className="text-slate-600">
+                      Szybka kontrola gotowości przed sparingiem, turniejem albo ważnym treningiem.
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl bg-slate-100 px-4 py-3 text-right">
+                    <p className="text-sm text-slate-500">Gotowość</p>
+                    <p className="text-3xl font-black text-orange-700">{checklistProgress}%</p>
+                  </div>
+                </div>
+
+                <div className="mb-5 h-4 overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="h-full rounded-full bg-orange-600"
+                    style={{ width: `${checklistProgress}%` }}
+                  />
+                </div>
+
+                <div className="space-y-3">
+                  {checklistItems.map((item) => {
+                    const checked = checkedItems.includes(item);
+
+                    return (
+                      <button
+                        key={item}
+                        onClick={() => toggleChecklistItem(item)}
+                        className={`flex w-full items-center gap-3 rounded-xl border p-4 text-left transition ${
+                          checked
+                            ? "border-green-300 bg-green-50"
+                            : "border-slate-200 bg-white hover:bg-slate-50"
+                        }`}
+                      >
+                        <span
+                          className={`flex h-7 w-7 items-center justify-center rounded-full text-sm font-black ${
+                            checked
+                              ? "bg-green-600 text-white"
+                              : "bg-slate-200 text-slate-600"
+                          }`}
+                        >
+                          {checked ? "✓" : ""}
+                        </span>
+
+                        <span className="font-bold text-slate-800">{item}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-5 flex flex-wrap gap-3">
+                  <button
+                    onClick={resetChecklist}
+                    className="rounded bg-slate-200 px-5 py-3 font-bold text-slate-800 hover:bg-slate-300"
+                  >
+                    Reset
+                  </button>
+
+                  {checklistProgress === 100 && (
+                    <span className="rounded bg-green-100 px-5 py-3 font-bold text-green-700">
+                      Gotowa do gry ✅
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === "wheel" && (
+            <div className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
+              <div className="rounded-2xl bg-white p-6 shadow">
+                <h2 className="text-2xl font-black">Koło zawodnika</h2>
+                <p className="mt-2 text-slate-600">
+                  Oceń swoje umiejętności od 1 do 10. Najlepiej powtarzać co 3 miesiące.
+                </p>
+
+                <div className="mt-6 space-y-4">
+                  <SkillSlider label={skillLabels.potting} value={potting} onChange={setPotting} />
+                  <SkillSlider label={skillLabels.doubles} value={doubles} onChange={setDoubles} />
+                  <SkillSlider label={skillLabels.jumps} value={jumps} onChange={setJumps} />
+                  <SkillSlider label={skillLabels.breakShot} value={breakShot} onChange={setBreakShot} />
+                  <SkillSlider label={skillLabels.safety} value={safety} onChange={setSafety} />
+                  <SkillSlider label={skillLabels.position} value={position} onChange={setPosition} />
+                </div>
+
+                <textarea
+                  className="mt-6 min-h-[120px] w-full rounded border p-3"
+                  placeholder="Nad czym chcesz pracować przez najbliższe 3 miesiące?"
+                  value={developmentPlan}
+                  onChange={(event) => setDevelopmentPlan(event.target.value)}
+                />
+
+                <button
+                  onClick={saveMentalProfile}
+                  disabled={savingProfile}
+                  className="mt-4 rounded bg-orange-600 px-6 py-3 font-bold text-white hover:bg-orange-500 disabled:opacity-60"
+                >
+                  {savingProfile ? "Zapisywanie..." : "Zapisz koło zawodnika"}
+                </button>
+              </div>
+
+              <div className="rounded-2xl bg-white p-6 shadow">
+                <h2 className="text-2xl font-black">Aktualne koło</h2>
+
+                {!latestProfile ? (
+                  <p className="mt-4 text-slate-600">Brak zapisanej samooceny.</p>
+                ) : (
+                  <>
+                    <div className="mt-5 space-y-4">
+                      <SkillBar label={skillLabels.potting} value={latestProfile.potting} />
+                      <SkillBar label={skillLabels.doubles} value={latestProfile.doubles} />
+                      <SkillBar label={skillLabels.jumps} value={latestProfile.jumps} />
+                      <SkillBar label={skillLabels.breakShot} value={latestProfile.breakShot} />
+                      <SkillBar label={skillLabels.safety} value={latestProfile.safety} />
+                      <SkillBar label={skillLabels.position} value={latestProfile.position} />
+                    </div>
+
+                    {latestProfile.developmentPlan && (
+                      <div className="mt-6 rounded-xl bg-slate-50 p-4">
+                        <p className="mb-2 text-sm font-bold text-slate-500">
+                          Plan na kolejne miesiące
+                        </p>
+                        <p className="whitespace-pre-wrap text-slate-800">
+                          {latestProfile.developmentPlan}
+                        </p>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </div>
-          </div>
+          )}
 
-          {/* Koło */}
-          <div className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
-            <div className="rounded-2xl bg-white p-6 shadow">
-              <h2 className="text-2xl font-black">Koło zawodnika</h2>
-              <p className="mt-2 text-slate-600">
-                Oceń swoje umiejętności od 1 do 10. Najlepiej powtarzać co 3 miesiące.
-              </p>
-
-              <div className="mt-6 space-y-4">
-                <SkillSlider label={skillLabels.potting} value={potting} onChange={setPotting} />
-                <SkillSlider label={skillLabels.doubles} value={doubles} onChange={setDoubles} />
-                <SkillSlider label={skillLabels.jumps} value={jumps} onChange={setJumps} />
-                <SkillSlider label={skillLabels.breakShot} value={breakShot} onChange={setBreakShot} />
-                <SkillSlider label={skillLabels.safety} value={safety} onChange={setSafety} />
-                <SkillSlider label={skillLabels.position} value={position} onChange={setPosition} />
-              </div>
-
-              <textarea
-                className="mt-6 min-h-[120px] w-full rounded border p-3"
-                placeholder="Nad czym chcesz pracować przez najbliższe 3 miesiące?"
-                value={developmentPlan}
-                onChange={(event) => setDevelopmentPlan(event.target.value)}
-              />
-
-              <button
-                onClick={saveMentalProfile}
-                disabled={savingProfile}
-                className="mt-4 rounded bg-orange-600 px-6 py-3 font-bold text-white hover:bg-orange-500 disabled:opacity-60"
-              >
-                {savingProfile ? "Zapisywanie..." : "Zapisz koło zawodnika"}
-              </button>
-            </div>
-
-            <div className="rounded-2xl bg-white p-6 shadow">
-              <h2 className="text-2xl font-black">Aktualne koło</h2>
-
-              {!latestProfile ? (
-                <p className="mt-4 text-slate-600">Brak zapisanej samooceny.</p>
-              ) : (
-                <>
-                  <div className="mt-5 space-y-4">
-                    <SkillBar label={skillLabels.potting} value={latestProfile.potting} />
-                    <SkillBar label={skillLabels.doubles} value={latestProfile.doubles} />
-                    <SkillBar label={skillLabels.jumps} value={latestProfile.jumps} />
-                    <SkillBar label={skillLabels.breakShot} value={latestProfile.breakShot} />
-                    <SkillBar label={skillLabels.safety} value={latestProfile.safety} />
-                    <SkillBar label={skillLabels.position} value={latestProfile.position} />
-                  </div>
-
-                  {latestProfile.developmentPlan && (
-                    <div className="mt-6 rounded-xl bg-slate-50 p-4">
-                      <p className="mb-2 text-sm font-bold text-slate-500">
-                        Plan na kolejne miesiące
-                      </p>
-                      <p className="whitespace-pre-wrap text-slate-800">
-                        {latestProfile.developmentPlan}
-                      </p>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* Historie */}
-          <div className="grid gap-6 lg:grid-cols-3">
-            <div className="rounded-2xl bg-white p-6 shadow">
-              <h2 className="mb-4 text-2xl font-black">Historia Setka Game</h2>
-
-              {results.length === 0 ? (
-                <p className="text-slate-600">Brak zapisanych wyników.</p>
-              ) : (
-                <div className="space-y-2">
-                  {results.slice(0, 10).map((result, index) => (
-                    <div
-                      key={result.id}
-                      className="rounded border p-3"
-                    >
+          {activeTab === "history" && (
+            <div className="grid gap-6 lg:grid-cols-3">
+              <HistoryCard title="Historia Setka Game">
+                {results.length === 0 ? (
+                  <p className="text-slate-600">Brak zapisanych wyników.</p>
+                ) : (
+                  results.slice(0, 10).map((result, index) => (
+                    <div key={result.id} className="rounded border p-3">
                       <p className="font-bold">
                         #{index + 1} — {formatTime(result.timeMs)}
                       </p>
-                      <p className="text-sm text-slate-500">
-                        {formatDate(result.createdAt)}
-                      </p>
+                      <p className="text-sm text-slate-500">{formatDate(result.createdAt)}</p>
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
+                  ))
+                )}
+              </HistoryCard>
 
-            <div className="rounded-2xl bg-white p-6 shadow">
-              <h2 className="mb-4 text-2xl font-black">Historia Focus Test</h2>
-
-              {focusResults.length === 0 ? (
-                <p className="text-slate-600">Brak zapisanych wyników.</p>
-              ) : (
-                <div className="space-y-2">
-                  {focusResults.slice(0, 10).map((result, index) => (
-                    <div
-                      key={result.id}
-                      className="rounded border p-3"
-                    >
+              <HistoryCard title="Historia Focus Test">
+                {focusResults.length === 0 ? (
+                  <p className="text-slate-600">Brak zapisanych wyników.</p>
+                ) : (
+                  focusResults.slice(0, 10).map((result, index) => (
+                    <div key={result.id} className="rounded border p-3">
                       <p className="font-bold">
                         #{index + 1} — średnia {formatMs(result.averageMs)}
                       </p>
                       <p className="text-sm text-slate-500">
                         Best klik: {formatMs(result.bestMs)}
                       </p>
-                      <p className="text-sm text-slate-500">
-                        {formatDate(result.createdAt)}
-                      </p>
+                      <p className="text-sm text-slate-500">{formatDate(result.createdAt)}</p>
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
+                  ))
+                )}
+              </HistoryCard>
 
-            <div className="rounded-2xl bg-white p-6 shadow">
-              <h2 className="mb-4 text-2xl font-black">Historia Stroop Test</h2>
-
-              {stroopResults.length === 0 ? (
-                <p className="text-slate-600">Brak zapisanych wyników.</p>
-              ) : (
-                <div className="space-y-2">
-                  {stroopResults.slice(0, 10).map((result, index) => (
-                    <div
-                      key={result.id}
-                      className="rounded border p-3"
-                    >
+              <HistoryCard title="Historia Stroop Test">
+                {stroopResults.length === 0 ? (
+                  <p className="text-slate-600">Brak zapisanych wyników.</p>
+                ) : (
+                  stroopResults.slice(0, 10).map((result, index) => (
+                    <div key={result.id} className="rounded border p-3">
                       <p className="font-bold">
                         #{index + 1} — {result.accuracy.toFixed(0)}%
                       </p>
                       <p className="text-sm text-slate-500">
                         Średni czas: {formatMs(result.averageMs)} · Poprawne: {result.correct}/{result.rounds}
                       </p>
-                      <p className="text-sm text-slate-500">
-                        {formatDate(result.createdAt)}
-                      </p>
+                      <p className="text-sm text-slate-500">{formatDate(result.createdAt)}</p>
                     </div>
-                  ))}
-                </div>
-              )}
+                  ))
+                )}
+              </HistoryCard>
             </div>
-          </div>
+          )}
         </section>
       )}
     </LoginRequired>
+  );
+}
+
+function MentalTabButton({
+  active,
+  title,
+  subtitle,
+  onClick,
+}: {
+  active: boolean;
+  title: string;
+  subtitle: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-2xl p-4 text-left shadow transition ${
+        active
+          ? "bg-orange-600 text-white"
+          : "bg-white text-slate-900 hover:bg-orange-50"
+      }`}
+    >
+      <p className="font-black">{title}</p>
+      <p className={`mt-1 text-xs ${active ? "text-orange-100" : "text-slate-500"}`}>
+        {subtitle}
+      </p>
+    </button>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  subValue,
+}: {
+  label: string;
+  value: string;
+  subValue?: string;
+}) {
+  return (
+    <div className="rounded-2xl bg-white p-5 shadow">
+      <p className="text-sm text-slate-500">{label}</p>
+      <p className="text-3xl font-black">{value}</p>
+      {subValue && <p className="mt-1 text-xs text-slate-500">{subValue}</p>}
+    </div>
+  );
+}
+
+function DashboardShortcut({
+  title,
+  description,
+  button,
+  onClick,
+}: {
+  title: string;
+  description: string;
+  button: string;
+  onClick: () => void;
+}) {
+  return (
+    <div className="rounded-2xl bg-white p-6 shadow">
+      <h2 className="text-xl font-black">{title}</h2>
+      <p className="mt-2 min-h-[48px] text-slate-600">{description}</p>
+      <button
+        onClick={onClick}
+        className="mt-5 rounded bg-slate-800 px-5 py-3 font-bold text-white hover:bg-slate-700"
+      >
+        {button}
+      </button>
+    </div>
+  );
+}
+
+function HistoryCard({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl bg-white p-6 shadow">
+      <h2 className="mb-4 text-2xl font-black">{title}</h2>
+      <div className="space-y-2">{children}</div>
+    </div>
   );
 }
 
